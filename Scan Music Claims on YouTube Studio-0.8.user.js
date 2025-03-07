@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Scan Music Claims on YouTube Studio
 // @namespace    http://tampermonkey.net/
-// @version      0.8
+// @version      0.9
 // @description  Scan music claims on YouTube Studio with a modern, professional UI
 // @author       You
 // @match        https://studio.youtube.com/*
@@ -28,23 +28,22 @@
         button.id = 'scan-button';
         button.innerText = 'Scan';
         button.style.position = 'fixed';
-        button.style.bottom = '20px'; // Đặt ở góc dưới bên trái
+        button.style.bottom = '20px';
         button.style.left = '20px';
         button.style.zIndex = '9999';
         button.style.padding = '12px 24px';
-        button.style.background = 'linear-gradient(135deg, #00C4B4, #3B82F6)'; // Gradient hiện đại
+        button.style.background = 'linear-gradient(135deg, #00C4B4, #3B82F6)';
         button.style.color = 'white';
         button.style.border = 'none';
-        button.style.borderRadius = '10px'; // Bo góc mềm mại
+        button.style.borderRadius = '10px';
         button.style.cursor = 'move';
-        button.style.boxShadow = '0 4px 15px rgba(0, 188, 212, 0.3)'; // Hiệu ứng neon nhẹ
-        button.style.transition = 'all 0.3s ease'; // Hiệu ứng mượt mà
+        button.style.boxShadow = '0 4px 15px rgba(0, 188, 212, 0.3)';
+        button.style.transition = 'all 0.3s ease';
         button.style.fontFamily = "'Roboto', sans-serif";
         button.style.fontSize = '14px';
         button.style.fontWeight = '500';
-        button.style.opacity = '0.5'; // Độ mờ 50% mặc định
+        button.style.opacity = '0.5';
 
-        // Hiệu ứng hover
         button.addEventListener('mouseover', () => {
             button.style.opacity = '1';
             button.style.transform = 'translateY(-3px)';
@@ -58,12 +57,10 @@
             }
         });
 
-        // Khi kéo thả, giữ opacity ở 1
         button.addEventListener('mousedown', () => {
             button.style.opacity = '1';
         });
 
-        // Tooltip hiện đại
         const tooltip = document.createElement('span');
         tooltip.id = 'scan-tooltip';
         tooltip.innerText = 'Click to scan music claims';
@@ -71,7 +68,7 @@
         tooltip.style.bottom = 'calc(100% + 10px)';
         tooltip.style.left = '50%';
         tooltip.style.transform = 'translateX(-50%)';
-        tooltip.style.backgroundColor = '#2D3748'; // Xám đậm
+        tooltip.style.backgroundColor = '#2D3748';
         tooltip.style.color = 'white';
         tooltip.style.padding = '6px 12px';
         tooltip.style.borderRadius = '6px';
@@ -82,7 +79,6 @@
         tooltip.style.pointerEvents = 'none';
         tooltip.style.whiteSpace = 'nowrap';
 
-        // Thêm mũi tên cho tooltip
         const arrow = document.createElement('div');
         arrow.style.position = 'absolute';
         arrow.style.bottom = '-5px';
@@ -153,7 +149,7 @@
 
     function stopDragging() {
         const button = document.getElementById('scan-button');
-        button.style.opacity = '0.5'; // Trở lại độ mờ 50% sau khi thả
+        button.style.opacity = '0.5';
         button.style.transform = 'translateY(0)';
         button.style.boxShadow = '0 4px 15px rgba(0, 188, 212, 0.3)';
         isDragging = false;
@@ -169,11 +165,21 @@
 
         document.querySelectorAll('.custom-claim-label').forEach(label => label.remove());
 
+        let epidemicCount = 0;
+        let nonEpidemicCount = 0;
+        const totalCount = claimRows.length;
+
         claimRows.forEach((row) => {
             const songTitle = row.querySelector('#asset-title')?.innerText || 'Không xác định';
             const artist = row.querySelector('#artists')?.innerText || 'Không xác định';
             const copyrightOwnerElement = row.querySelector('.impact-tooltip-text')?.innerText || 'Không xác định';
             const isEpidemic = copyrightOwnerElement.includes('Epidemic Sound');
+
+            if (isEpidemic) {
+                epidemicCount++;
+            } else {
+                nonEpidemicCount++;
+            }
 
             const claimLabel = document.createElement('span');
             claimLabel.className = 'custom-claim-label';
@@ -181,8 +187,8 @@
             claimLabel.style.fontSize = '12px';
             claimLabel.style.marginLeft = '10px';
             claimLabel.style.display = 'inline-block';
-            claimLabel.style.color = isEpidemic ? '#ffffff' : '#F56565'; // Đỏ nhạt cho non-Epidemic
-            claimLabel.style.backgroundColor = isEpidemic ? '#38B2AC' : '#FEE2E2'; // Xanh ngọc cho Epidemic, đỏ nhạt cho non-Epidemic
+            claimLabel.style.color = isEpidemic ? '#ffffff' : '#F56565';
+            claimLabel.style.backgroundColor = isEpidemic ? '#38B2AC' : '#FEE2E2';
             claimLabel.style.padding = '6px 10px';
             claimLabel.style.borderRadius = '6px';
             claimLabel.style.fontFamily = "'Roboto', sans-serif";
@@ -203,6 +209,11 @@
                 row.appendChild(claimLabel);
             }
         });
+
+        // Hiển thị thông báo ngắn gọn
+        setTimeout(() => {
+            alert(`Tổng: ${totalCount} | Epidemic: ${epidemicCount} | Non-Epidemic: ${nonEpidemicCount}`);
+        }, 500);
     }
 
     function init() {
