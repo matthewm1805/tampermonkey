@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Video Info Exporter
 // @namespace    http://tampermonkey.net/
-// @version      1.2
+// @version      1.5
 // @description  Export YouTube video info to Excel with a Download button styled like Subscribe
 // @author       Matthew M.
 // @match        https://www.youtube.com/*
@@ -12,52 +12,78 @@
 (function() {
     'use strict';
 
-    // Hàm để tạo và thêm nút "Download Info"
+    // Hàm kiểm tra và thêm nút "Download Info"
     function addDownloadButton() {
-        if (document.querySelector('#youtube-video-exporter-download-btn')) return;
-
-        // Tìm nút Subscribe dựa trên yt-subscribe-button-view-model
-        const subscribeButton = document.querySelector('yt-subscribe-button-view-model');
-        if (!subscribeButton) {
-            console.log('Subscribe button (yt-subscribe-button-view-model) not found yet, retrying...');
-            setTimeout(addDownloadButton, 500); // Thử lại sau 0.5 giây
+        const existingButton = document.querySelector('#youtube-video-exporter-download-btn');
+        if (existingButton) {
+            console.log('Button already exists in DOM, skipping...');
             return;
         }
 
-        // Tạo nút Download Info
+        console.log('No button found, attempting to add...');
+        tryAddButtonWithRetry();
+    }
+
+    // Hàm thử thêm nút với retry logic
+    function tryAddButtonWithRetry() {
+        let attempts = 0;
+        const maxAttempts = 15; // Tăng số lần thử để phù hợp với tốc độ tải của Firefox/Edge
+        const interval = setInterval(() => {
+            const subscribeButton = document.querySelector('yt-subscribe-button-view-model') ||
+                                   document.querySelector('ytd-subscribe-button-renderer'); // Thêm fallback selector
+            if (subscribeButton) {
+                clearInterval(interval);
+                insertDownloadButton(subscribeButton);
+            } else if (attempts >= maxAttempts) {
+                clearInterval(interval);
+                console.log('Failed to find Subscribe button after max attempts. DOM may have changed.');
+            }
+            attempts++;
+            console.log(`Attempt ${attempts} to find Subscribe button...`);
+        }, 500);
+    }
+
+    // Hàm chèn nút vào DOM
+    function insertDownloadButton(subscribeButton) {
+        const existingButton = document.querySelector('#youtube-video-exporter-download-btn');
+        if (existingButton) {
+            console.log('Button already added during retry, skipping insertion...');
+            return;
+        }
+
         const button = document.createElement('button');
         button.id = 'youtube-video-exporter-download-btn';
         button.innerText = 'Download Info';
 
         // Sao chép style từ nút Subscribe
-        const subscribeBtn = subscribeButton.querySelector('button');
+        const subscribeBtn = subscribeButton.querySelector('button') ||
+                            subscribeButton.querySelector('.yt-spec-button-shape-next');
         if (!subscribeBtn) {
-            console.log('Inner button of Subscribe not found, retrying...');
-            setTimeout(addDownloadButton, 500);
+            console.log('Inner button of Subscribe not found.');
             return;
         }
         const subscribeStyle = window.getComputedStyle(subscribeBtn);
-        button.style.backgroundColor = '#FF0000'; // Nền đỏ YouTube
-        button.style.color = '#FFFFFF'; // Chữ trắng
+        button.style.backgroundColor = '#FF0000';
+        button.style.color = '#FFFFFF';
         button.style.border = 'none';
-        button.style.borderRadius = subscribeStyle.borderRadius; // Bo tròn giống Subscribe
-        button.style.padding = subscribeStyle.padding; // Padding giống Subscribe
-        button.style.fontSize = subscribeStyle.fontSize; // Font size giống Subscribe
-        button.style.fontFamily = subscribeStyle.fontFamily; // Font family giống Subscribe
-        button.style.fontWeight = subscribeStyle.fontWeight; // Font weight giống Subscribe
-        button.style.textTransform = subscribeStyle.textTransform; // Text transform giống Subscribe
+        button.style.borderRadius = subscribeStyle.borderRadius || '2px'; // Fallback cho Firefox
+        button.style.padding = subscribeStyle.padding || '10px 16px';
+        button.style.fontSize = subscribeStyle.fontSize || '14px';
+        button.style.fontFamily = subscribeStyle.fontFamily || 'Roboto, Arial, sans-serif';
+        button.style.fontWeight = subscribeStyle.fontWeight || '500';
+        button.style.textTransform = subscribeStyle.textTransform || 'uppercase';
         button.style.cursor = 'pointer';
-        button.style.height = subscribeStyle.height; // Chiều cao giống Subscribe
+        button.style.height = subscribeStyle.height || '36px';
         button.style.display = 'inline-flex';
         button.style.alignItems = 'center';
         button.style.justifyContent = 'center';
-        button.style.boxShadow = subscribeStyle.boxShadow;
+        button.style.boxShadow = subscribeStyle.boxShadow || 'none';
         button.style.transition = 'background-color 0.3s';
-        button.style.marginLeft = '8px'; // Khoảng cách nhỏ hơn để vừa khít
+        button.style.marginLeft = '8px';
 
         // Hover effect
         button.addEventListener('mouseover', () => {
-            button.style.backgroundColor = '#CC0000'; // Màu đỏ đậm hơn khi hover
+            button.style.backgroundColor = '#CC0000';
         });
         button.addEventListener('mouseout', () => {
             button.style.backgroundColor = '#FF0000';
@@ -65,17 +91,16 @@
 
         button.onclick = handleDownloadClick;
 
-        // Tìm container cha (yt-flexible-actions-view-model) để chèn nút
-        const parentContainer = subscribeButton.closest('yt-flexible-actions-view-model');
+        // Chèn nút vào DOM
+        const parentContainer = subscribeButton.closest('yt-flexible-actions-view-model') ||
+                               subscribeButton.parentElement; // Fallback cho Edge/Firefox
         if (parentContainer) {
-            // Chèn nút ngay sau nút Subscribe trong container flex
             parentContainer.insertBefore(button, subscribeButton.nextSibling);
-            // Đảm bảo container cha là flex để nút nằm ngang hàng
             parentContainer.style.display = 'flex';
             parentContainer.style.alignItems = 'center';
-            console.log('Download Info button added successfully next to Subscribe button.');
+            console.log('Download Info button added successfully.');
         } else {
-            console.log('Parent container (yt-flexible-actions-view-model) not found, inserting after Subscribe button.');
+            console.log('Parent container not found, inserting after Subscribe button.');
             subscribeButton.parentNode.insertBefore(button, subscribeButton.nextSibling);
         }
     }
@@ -99,7 +124,6 @@
                 return;
             }
 
-            // Lấy lại channelName mỗi khi nhấn nút để đảm bảo đúng kênh hiện tại
             const channelName = getChannelName();
             const fileName = channelName ? `${channelName}_videos.xlsx` : 'youtube_videos.xlsx';
 
@@ -127,12 +151,9 @@
                 window.scrollTo(0, document.documentElement.scrollHeight);
                 currentHeight = document.documentElement.scrollHeight;
 
-                console.log(`Scroll attempt ${scrollAttempts + 1}: Previous height = ${previousHeight}, Current height = ${currentHeight}`);
-
                 if (currentHeight === previousHeight) {
                     scrollAttempts++;
                     if (scrollAttempts >= 3) {
-                        console.log('No more content to load, stopping scroll.');
                         clearInterval(scrollInterval);
                         setTimeout(() => resolve(), 2000);
                     }
@@ -142,7 +163,6 @@
                 }
 
                 if (scrollAttempts >= maxAttempts) {
-                    console.log('Reached maximum scroll attempts, stopping.');
                     clearInterval(scrollInterval);
                     resolve();
                 }
@@ -157,7 +177,7 @@
         const videoData = [];
         const seenUrls = new Set();
 
-        videos.forEach((video, index) => {
+        videos.forEach((video) => {
             try {
                 const urlElement = video.querySelector('#thumbnail a');
                 const videoURL = urlElement ? 'https://www.youtube.com' + urlElement.getAttribute('href') : '';
@@ -201,21 +221,17 @@
         console.log('Attempting to get channel name...');
         const channelHeader = document.querySelector('#channel-name #text');
         if (channelHeader && channelHeader.innerText) {
-            console.log('Channel name found in UI:', channelHeader.innerText);
             return channelHeader.innerText.trim().replace(/[^a-zA-Z0-9]/g, '_');
         }
 
         const metaChannelName = document.querySelector('meta[itemprop="name"]');
         if (metaChannelName) {
-            console.log('Channel name found in meta:', metaChannelName.getAttribute('content'));
             return metaChannelName.getAttribute('content').trim().replace(/[^a-zA-Z0-9]/g, '_');
         }
 
         const titleElement = document.querySelector('title');
         if (titleElement) {
-            const title = titleElement.innerText.replace(' - YouTube', '').trim().replace(/[^a-zA-Z0-9]/g, '_');
-            console.log('Channel name fallback from title:', title);
-            return title;
+            return titleElement.innerText.replace(' - YouTube', '').trim().replace(/[^a-zA-Z0-9]/g, '_');
         }
 
         console.log('Could not find channel name, using default.');
@@ -236,21 +252,25 @@
         }
     }
 
-    // Theo dõi DOM để thêm nút khi sẵn sàng
+    // Khởi tạo và theo dõi DOM
     function init() {
         addDownloadButton();
 
-        const observer = new MutationObserver((mutations) => {
-            if (!document.querySelector('#youtube-video-exporter-download-btn')) {
+        const observer = new MutationObserver(() => {
+            const button = document.querySelector('#youtube-video-exporter-download-btn');
+            if (!button) {
+                console.log('Button not found in DOM, re-adding immediately...');
                 addDownloadButton();
             }
         });
         observer.observe(document.body, { childList: true, subtree: true });
+
+        window.addEventListener('load', addDownloadButton);
+        document.addEventListener('DOMContentLoaded', () => {
+            setTimeout(addDownloadButton, 1000);
+        });
     }
 
-    // Chạy khi trang tải hoặc DOM thay đổi
-    window.addEventListener('load', init);
-    document.addEventListener('DOMContentLoaded', () => {
-        setTimeout(init, 1000); // Delay để đảm bảo DOM sẵn sàng
-    });
+    // Chạy khi script khởi động
+    init();
 })();
