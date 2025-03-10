@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @version      0.9
 // @description  Scan music claims on YouTube Studio with a modern, professional UI
-// @author       You
+// @author       Matthew M.
 // @match        https://studio.youtube.com/*
 // @grant        none
 // ==/UserScript==
