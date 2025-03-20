@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @version      1.1
 // @description  Hide videos older than a specified number of days in YouTube's recommendations sidebar.
-// @author       Your Name
+// @author       Matthew M.
 // @match        *://www.youtube.com/watch*
 // @grant        none
 // ==/UserScript==
