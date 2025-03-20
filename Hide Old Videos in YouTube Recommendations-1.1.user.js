@@ -38,7 +38,7 @@
         });
     }
 
-    // Run function initially and observe changes in recommendations
+    // Fetch
     let observer = new MutationObserver(hideOldVideos);
     observer.observe(document.body, { childList: true, subtree: true });
     hideOldVideos();
