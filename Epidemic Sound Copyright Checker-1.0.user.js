@@ -1,5 +1,6 @@
 // ==UserScript==
 // @name         Epidemic Sound Copyright Checker
+// @author       Matthew M.
 // @namespace    http://tampermonkey.net/
 // @version      1.0
 // @description  Epidemic Copyright Checker
