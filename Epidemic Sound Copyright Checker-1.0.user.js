@@ -7,7 +7,7 @@
 // @match        https://studio.youtube.com/*
 // @grant        none
 // ==/UserScript==
-
+ 
 (function() {
     'use strict';
 
