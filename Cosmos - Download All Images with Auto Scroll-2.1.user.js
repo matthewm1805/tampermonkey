@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Cosmos | Download All Images with Auto Scroll
 // @namespace    http://tampermonkey.net/
-// @version      2.1
-// @description  Download all images on the page with optimized scrolling. Skips images under 50KB. Ensures no images are missed before exiting.
+// @version      2.3
+// @description  Download all images on the page with optimized scrolling. Shows running status and image count.
 // @author       Matthew M.
 // @match        *://*.cosmos.so/*
 // @grant        none
@@ -11,11 +11,19 @@
 (function() {
     'use strict';
 
-    let imageCounter = 1;
+    let imageCounter = 0;
+    let downloadedCount = 0;
     let downloaded = new Set();
+    let button;
+    let isRunning = false;
 
     function getBestImageSource(img) {
-        return img.src || img.getAttribute('data-src') || img.getAttribute('srcset')?.split(' ')[0] || '';
+        let src = img.src || img.getAttribute('data-src') || img.getAttribute('srcset')?.split(' ')[0] || '';
+        
+        if (src.includes('cdn.cosmos.so')) {
+            src = src.replace(/\?format=webp&w=\d+/, '?format=jpg');
+        }
+        return src;
     }
 
     async function downloadImage(url) {
@@ -24,12 +32,13 @@
             const blob = await response.blob();
 
             if (blob.size < 50000) {
-                console.log(`Skipping image, size is below 50KB.`);
-                return;
+                console.log(`Skipping image ${url}, size is below 50KB`);
+                return false;
             }
 
-            const filename = `image_${imageCounter}.jpg`;
             imageCounter++;
+            downloadedCount++;
+            const filename = `image_${imageCounter}.jpg`;
 
             const link = document.createElement('a');
             link.href = URL.createObjectURL(blob);
@@ -38,46 +47,64 @@
             link.click();
             document.body.removeChild(link);
             URL.revokeObjectURL(link.href);
+            
+            updateButtonText();
+            return true;
         } catch (error) {
-            console.error(`Error downloading image:`, error);
+            console.error(`Error downloading image ${url}:`, error);
+            return false;
         }
     }
 
     async function scanAndDownloadImages() {
         const images = document.querySelectorAll('img');
-        let newImages = [];
-
+        let newImages = new Set();
+        
         images.forEach((img) => {
-            let url = getBestImageSource(img);
-            if (url && !downloaded.has(url)) {
-                downloaded.add(url);
-                newImages.push(url);
+            if (img.complete && img.naturalHeight > 0) {
+                let url = getBestImageSource(img);
+                if (url && !downloaded.has(url)) {
+                    downloaded.add(url);
+                    newImages.add(url);
+                }
             }
         });
 
-        for (let i = 0; i < newImages.length; i++) {
-            await downloadImage(newImages[i]);
+        let successfulDownloads = 0;
+        for (let url of newImages) {
+            if (await downloadImage(url)) {
+                successfulDownloads++;
+            }
         }
 
-        return newImages.length > 0;
+        return successfulDownloads;
     }
 
     async function downloadAllImages() {
-        imageCounter = 1;
+        if (isRunning) return; // Prevent multiple runs
+        
+        isRunning = true;
+        imageCounter = 0;
+        downloadedCount = 0;
+        downloaded.clear();
+        
+        updateButtonText(); // Show "Running..."
+
         let lastHeight = 0;
         let retryCount = 0;
+        let maxRetries = 5;
 
-        while (retryCount < 3) {
-            let foundNewImages = await scanAndDownloadImages();
+        while (retryCount < maxRetries && isRunning) {
+            let successfulDownloads = await scanAndDownloadImages();
 
-            if (foundNewImages) {
+            if (successfulDownloads > 0) {
                 retryCount = 0;
             } else {
                 retryCount++;
             }
 
-            window.scrollBy(0, window.innerHeight);
-            await new Promise(resolve => setTimeout(resolve, 1500));
+            window.scrollBy(0, window.innerHeight * 2);
+            await new Promise(resolve => setTimeout(resolve, 2000));
 
             let newHeight = document.body.scrollHeight;
             if (newHeight === lastHeight) {
@@ -86,17 +113,30 @@
             lastHeight = newHeight;
         }
 
-        console.log("Final scan for missed images...");
-        let finalCheck = await scanAndDownloadImages();
+        // Final scan
+        console.log("Performing final scan for missed images...");
+        await scanAndDownloadImages();
 
-        if (!finalCheck) {
-            console.log("All images downloaded. Exiting script.");
+        console.log(`Download complete. Total: ${imageCounter}, Successfully downloaded: ${downloadedCount}`);
+        isRunning = false;
+        updateButtonText(); // Show final counts
+    }
+
+    function updateButtonText() {
+        if (isRunning) {
+            button.innerText = "Running...";
+            button.style.background = '#ffeb3b'; // Yellow background while running
+            button.style.color = 'black';
+        } else {
+            button.innerText = `Download All\nFound: ${imageCounter} | Downloaded: ${downloadedCount}`;
+            button.style.background = 'white'; // Back to white when done
+            button.style.color = 'black';
         }
     }
 
     function createDownloadButton() {
-        const button = document.createElement('button');
-        button.innerText = 'Download All';
+        button = document.createElement('button');
+        button.innerText = 'Download All\nFound: 0 | Downloaded: 0';
         button.style.position = 'fixed';
         button.style.bottom = '20px';
         button.style.right = '20px';
@@ -111,9 +151,13 @@
         button.style.zIndex = '10000';
         button.style.boxShadow = '0px 4px 10px rgba(0, 0, 0, 0.2)';
         button.style.transition = 'all 0.2s ease';
+        button.style.whiteSpace = 'pre-line';
+        button.style.textAlign = 'center';
 
         button.onmouseover = () => {
-            button.style.transform = 'scale(1.05)';
+            if (!isRunning) {
+                button.style.transform = 'scale(1.05)';
+            }
         };
 
         button.onmouseleave = () => {
@@ -124,14 +168,16 @@
         let offsetX, offsetY;
 
         button.addEventListener('mousedown', (e) => {
-            isDragging = true;
-            offsetX = e.clientX - button.getBoundingClientRect().left;
-            offsetY = e.clientY - button.getBoundingClientRect().top;
-            button.style.cursor = 'grabbing';
+            if (!isRunning) {
+                isDragging = true;
+                offsetX = e.clientX - button.getBoundingClientRect().left;
+                offsetY = e.clientY - button.getBoundingClientRect().top;
+                button.style.cursor = 'grabbing';
+            }
         });
 
         document.addEventListener('mousemove', (e) => {
-            if (isDragging) {
+            if (isDragging && !isRunning) {
                 button.style.left = `${e.clientX - offsetX}px`;
                 button.style.top = `${e.clientY - offsetY}px`;
             }
@@ -139,7 +185,9 @@
 
         document.addEventListener('mouseup', () => {
             isDragging = false;
-            button.style.cursor = 'grab';
+            if (!isRunning) {
+                button.style.cursor = 'grab';
+            }
         });
 
         button.onclick = downloadAllImages;
