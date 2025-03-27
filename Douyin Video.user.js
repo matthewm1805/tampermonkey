@@ -5,7 +5,7 @@
 // @description  Download videos from Douyin profile sequentially with video type selection, retry, and progress bar
 // @author       Matthew M.
 // @match        https://www.douyin.com/user/*
-// @updateURL    https://github.com/danthekidd/Kittl-Editor-Crack/raw/refs/heads/main/Kittl%20Editor%20Expert%20Spoofer.user.js
+// @updateURL    https://github.com/matthewm1805/tampermonkey/raw/refs/heads/main/Douyin%20Video.user.js
 // @grant        none
 // ==/UserScript==
 
