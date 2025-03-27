@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Douyin Video Downloader
 // @namespace    http://tampermonkey.net/
-// @version      1.1
+// @version      2.0
 // @description  Download videos from Douyin profile sequentially with video type selection, retry, and progress bar
 // @author       Matthew M.
 // @match        https://www.douyin.com/user/*
@@ -254,10 +254,11 @@
             "Which type of videos do you want to download?\n" +
             "1. Video dọc (Vertical)\n" +
             "2. Video ngang (Horizontal)\n" +
-            "3. Tất cả (All)\n" +
-            "4. Hủy (Cancel)\n" +
-            "Enter the number (1-4):",
-            "3"
+            "3. Video ngang 16:9 (Horizontal 16:9)\n" +
+            "4. Tất cả (All)\n" +
+            "5. Hủy (Cancel)\n" +
+            "Enter the number (1-5):",
+            "4"
         );
 
         let filterType;
@@ -269,9 +270,12 @@
                 filterType = "horizontal";
                 break;
             case "3":
-                filterType = "all";
+                filterType = "horizontal_16_9";
                 break;
             case "4":
+                filterType = "all";
+                break;
+            case "5":
             default:
                 alert("Download canceled.");
                 return;
@@ -305,15 +309,18 @@
                     const height = video['video']['height'] || 0;
                     const isVertical = height > width;
                     const isHorizontal = width > height;
+                    const aspectRatio = width / height;
+                    const is16_9 = isHorizontal && Math.abs(aspectRatio - 16/9) < 0.1; // Chấp nhận sai số nhỏ
 
                     // Lọc video theo loại
                     if (filterType === "vertical" && !isVertical) continue;
                     if (filterType === "horizontal" && !isHorizontal) continue;
+                    if (filterType === "horizontal_16_9" && !is16_9) continue;
 
                     videoList.push([url, video['aweme_id'], video['desc']]);
                     foundVideos++;
                     updateButtonText();
-                    console.log("Found video:", video['aweme_id'], "Type:", isVertical ? "Vertical" : "Horizontal", "Total:", foundVideos);
+                    console.log("Found video:", video['aweme_id'], "Type:", isVertical ? "Vertical" : "Horizontal", "Aspect Ratio:", aspectRatio.toFixed(2), "Total:", foundVideos);
                 }
             }
 
