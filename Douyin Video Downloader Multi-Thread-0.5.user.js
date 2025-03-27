@@ -1,9 +1,9 @@
 // ==UserScript==
-// @name         Douyin Video Downloader Sequential with Retry
+// @name         Douyin Video Downloader with Video Type Selection
 // @namespace    http://tampermonkey.net/
-// @version      0.9
-// @description  Download all videos from Douyin profile sequentially with retry for missing videos
-// @author       Matthew M.
+// @version      1.0
+// @description  Download videos from Douyin profile sequentially with video type selection and retry
+// @author       You
 // @match        https://www.douyin.com/user/*
 // @grant        none
 // ==/UserScript==
@@ -180,6 +180,34 @@
 
     // Hàm chính xử lý tải video
     async function downloadAllVideos() {
+        // Hỏi người dùng muốn tải loại video nào
+        const videoType = prompt(
+            "Which type of videos do you want to download?\n" +
+            "1. Video dọc (Vertical)\n" +
+            "2. Video ngang (Horizontal)\n" +
+            "3. Tất cả (All)\n" +
+            "4. Hủy (Cancel)\n" +
+            "Enter the number (1-4):",
+            "3"
+        );
+
+        let filterType;
+        switch (videoType) {
+            case "1":
+                filterType = "vertical";
+                break;
+            case "2":
+                filterType = "horizontal";
+                break;
+            case "3":
+                filterType = "all";
+                break;
+            case "4":
+            default:
+                alert("Download canceled.");
+                return;
+        }
+
         const videoList = [];
         let hasMore = 1;
         const sec_user_id = location.pathname.replace("/user/", "");
@@ -202,11 +230,29 @@
                     const url = video['video']['play_addr']['url_list'][0].startsWith("https")
                         ? video['video']['play_addr']['url_list'][0]
                         : video['video']['play_addr']['url_list'][0].replace("http", "https");
+
+                    // Lấy chiều rộng và chiều cao từ metadata
+                    const width = video['video']['width'] || 0;
+                    const height = video['video']['height'] || 0;
+                    const isVertical = height > width;
+                    const isHorizontal = width > height;
+
+                    // Lọc video theo loại
+                    if (filterType === "vertical" && !isVertical) continue;
+                    if (filterType === "horizontal" && !isHorizontal) continue;
+
                     videoList.push([url, video['aweme_id'], video['desc']]);
                     foundVideos++;
                     updateButtonText();
-                    console.log("Found video:", video['aweme_id'], "Total:", foundVideos);
+                    console.log("Found video:", video['aweme_id'], "Type:", isVertical ? "Vertical" : "Horizontal", "Total:", foundVideos);
                 }
+            }
+
+            if (videoList.length === 0) {
+                alert("No videos found matching your selection.");
+                downloadButton.disabled = false;
+                downloadButton.innerHTML = 'Download All';
+                return;
             }
 
             // Tải lần lượt theo thứ tự
@@ -244,7 +290,7 @@
 
     // Gắn sự kiện click cho nút
     downloadButton.addEventListener('click', function() {
-        if (confirm("Do you want to download all videos from this profile?")) {
+        if (confirm("Do you want to download videos from this profile?")) {
             downloadAllVideos();
         }
     });
