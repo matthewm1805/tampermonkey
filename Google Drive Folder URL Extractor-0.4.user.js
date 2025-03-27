@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @version      0.4
 // @description  Extract all file URLs from Google Drive folder
-// @author       Grok
+// @author       Matthew M.
 // @match        https://drive.google.com/drive/*
 // @grant        none
 // ==/UserScript==
