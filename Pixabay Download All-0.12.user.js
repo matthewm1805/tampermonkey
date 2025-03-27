@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Pixabay Download All
 // @namespace    http://tampermonkey.net/
-// @version      0.11
-// @description  Download all images from Pixabay with smart scrolling, fixed pagination, reliable stop, and updated modern UI
+// @version      0.12
+// @description  Download all images from Pixabay with smart scrolling, fixed pagination, reliable stop, updated modern UI, and handling new URL formats
 // @author       Matthew M.
 // @match        *://pixabay.com/*
 // @match        *://*.pixabay.com/*
@@ -58,8 +58,12 @@
         imageElements.forEach(img => {
             if (!img.complete) return;
             let url = img.src;
-            if (url.includes('_640.') && !state.processedUrls.includes(url)) {
-                url = url.replace('_640.', '_1280.');
+            if (!state.processedUrls.includes(url)) {
+                if (url.includes('_640.')) {
+                    url = url.replace('_640.', '_1280.');
+                } else if (url.includes('__340.')) {
+                    url = url.replace('__340.', '_960_720.');
+                }
                 newUrls.add(url);
                 state.processedUrls.push(url);
             }
@@ -83,8 +87,26 @@
                     resolve();
                 },
                 onerror: () => {
-                    console.log(`Error downloading ${url}`);
-                    resolve();
+                    // Nếu tải _1280 thất bại, thử _960_720 cho trường hợp __340
+                    if (url.includes('_1280.')) {
+                        const fallbackUrl = url.replace('_1280.', '_960_720.');
+                        GM_download({
+                            url: fallbackUrl,
+                            name: fallbackUrl.split('/').pop(),
+                            onload: () => {
+                                state.downloadedCount++;
+                                updateStateAndButton();
+                                resolve();
+                            },
+                            onerror: () => {
+                                console.log(`Error downloading ${fallbackUrl}`);
+                                resolve();
+                            }
+                        });
+                    } else {
+                        console.log(`Error downloading ${url}`);
+                        resolve();
+                    }
                 }
             });
         });
