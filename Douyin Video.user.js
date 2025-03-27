@@ -1,23 +1,30 @@
 // ==UserScript==
-// @name         Douyin Video Downloader with Video Type Selection
+// @name         Douyin Video Downloader
 // @namespace    http://tampermonkey.net/
-// @version      1.0
-// @description  Download videos from Douyin profile sequentially with video type selection and retry
-// @author       You
+// @version      1.1
+// @description  Download videos from Douyin profile sequentially with video type selection, retry, and progress bar
+// @author       Matthew M.
 // @match        https://www.douyin.com/user/*
+// @updateURL    https://github.com/danthekidd/Kittl-Editor-Crack/raw/refs/heads/main/Kittl%20Editor%20Expert%20Spoofer.user.js
 // @grant        none
 // ==/UserScript==
 
 (async function() {
     'use strict';
 
+    // Tạo container cho nút và thanh progress
+    const container = document.createElement('div');
+    container.style.position = 'fixed';
+    container.style.bottom = '20px';
+    container.style.right = '20px';
+    container.style.zIndex = '9999';
+    container.style.display = 'flex';
+    container.style.flexDirection = 'column';
+    container.style.alignItems = 'flex-end';
+
     // Tạo nút Download All
     const downloadButton = document.createElement('button');
     downloadButton.innerHTML = 'Download All';
-    downloadButton.style.position = 'fixed';
-    downloadButton.style.bottom = '20px';
-    downloadButton.style.right = '20px';
-    downloadButton.style.zIndex = '9999';
     downloadButton.style.padding = '12px 24px';
     downloadButton.style.backgroundColor = '#FF4444';
     downloadButton.style.color = 'white';
@@ -30,7 +37,7 @@
     downloadButton.style.boxShadow = '0 4px 8px rgba(0, 0, 0, 0.2)';
     downloadButton.style.transition = 'all 0.3s ease';
 
-    // Hiệu ứng hover
+    // Hiệu ứng hover cho nút
     downloadButton.addEventListener('mouseover', () => {
         downloadButton.style.backgroundColor = '#E63B3B';
         downloadButton.style.boxShadow = '0 6px 12px rgba(0, 0, 0, 0.3)';
@@ -42,7 +49,26 @@
         downloadButton.style.transform = 'translateY(0)';
     });
 
-    document.body.appendChild(downloadButton);
+    // Tạo thanh progress
+    const progressBarContainer = document.createElement('div');
+    progressBarContainer.style.width = '200px';
+    progressBarContainer.style.height = '10px';
+    progressBarContainer.style.backgroundColor = '#e0e0e0';
+    progressBarContainer.style.borderRadius = '5px';
+    progressBarContainer.style.marginTop = '10px';
+    progressBarContainer.style.overflow = 'hidden';
+    progressBarContainer.style.display = 'none'; // Ẩn mặc định
+
+    const progressBar = document.createElement('div');
+    progressBar.style.width = '0%';
+    progressBar.style.height = '100%';
+    progressBar.style.backgroundColor = '#4CAF50';
+    progressBar.style.transition = 'width 0.3s ease';
+
+    progressBarContainer.appendChild(progressBar);
+    container.appendChild(downloadButton);
+    container.appendChild(progressBarContainer);
+    document.body.appendChild(container);
 
     // Biến để theo dõi tiến trình
     let foundVideos = 0;
@@ -59,6 +85,19 @@
         if (now - lastUpdate > 500) { // Chỉ cập nhật mỗi 500ms
             downloadButton.innerHTML = `Found: ${foundVideos} | Downloaded: ${downloadedVideos}`;
             lastUpdate = now;
+        }
+    }
+
+    // Cập nhật thanh progress
+    function updateProgressBar(percentage) {
+        progressBar.style.width = `${percentage}%`;
+    }
+
+    // Hiển thị/ẩn thanh progress
+    function toggleProgressBar(show) {
+        progressBarContainer.style.display = show ? 'block' : 'none';
+        if (!show) {
+            updateProgressBar(0); // Reset progress khi ẩn
         }
     }
 
@@ -112,11 +151,11 @@
         }
     }
 
-    // Hàm tải video với cơ chế retry
+    // Hàm tải video với cơ chế retry và theo dõi tiến độ
     async function download(url, aweme_id, desc, retries = 0) {
         try {
-            const file_name = `${aweme_id}-${desc.replace(/[^\w\s]/gi, '')}.mp4`;
-            const data = await fetch(url, {
+            toggleProgressBar(true); // Hiển thị thanh progress
+            const response = await fetch(url, {
                 "headers": {
                     "accept": "*/*",
                     "range": "bytes=0-",
@@ -130,21 +169,50 @@
                 "mode": "cors",
                 "credentials": "omit"
             });
-            if (!data.ok) {
-                if (data.status === 429 && retries < MAX_RETRIES) {
+
+            if (!response.ok) {
+                if (response.status === 429 && retries < MAX_RETRIES) {
                     console.warn(`Rate limit hit for video ${aweme_id}. Retrying (${retries + 1}/${MAX_RETRIES})...`);
                     await waitforme(RETRY_DELAY);
                     return download(url, aweme_id, desc, retries + 1);
                 }
-                throw new Error(`HTTP error! Status: ${data.status}`);
+                throw new Error(`HTTP error! Status: ${response.status}`);
             }
-            const blob = await data.blob();
+
+            // Lấy tổng kích thước file từ header (nếu có)
+            const totalSize = parseInt(response.headers.get('content-length'), 10);
+            let loadedSize = 0;
+
+            // Tạo reader để đọc dữ liệu theo stream
+            const reader = response.body.getReader();
+            const chunks = [];
+
+            // Theo dõi tiến độ tải
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                chunks.push(value);
+                loadedSize += value.length;
+
+                // Cập nhật thanh progress nếu biết tổng kích thước
+                if (totalSize) {
+                    const percentage = Math.min((loadedSize / totalSize) * 100, 100);
+                    updateProgressBar(percentage);
+                }
+            }
+
+            // Gộp các chunk thành blob
+            const blob = new Blob(chunks);
+            const file_name = `${aweme_id}-${desc.replace(/[^\w\s]/gi, '')}.mp4`;
             const a = document.createElement("a");
             a.href = window.URL.createObjectURL(blob);
             a.download = file_name;
             a.click();
+
             downloadedVideos++;
             updateButtonText();
+            toggleProgressBar(false); // Ẩn thanh progress sau khi tải xong
             return true; // Tải thành công
         } catch (e) {
             console.error(`Error downloading video ${aweme_id}:`, e);
@@ -155,6 +223,7 @@
                 error: e.message
             });
             failedVideos.push([url, aweme_id, desc]); // Lưu video thất bại để retry
+            toggleProgressBar(false); // Ẩn thanh progress nếu lỗi
             return false; // Tải thất bại
         }
     }
@@ -285,6 +354,7 @@
         } finally {
             downloadButton.disabled = false;
             downloadButton.innerHTML = 'Download All';
+            toggleProgressBar(false); // Ẩn thanh progress khi hoàn tất
         }
     }
 
