@@ -1,10 +1,12 @@
 // ==UserScript==
 // @name         🧠 Auto Sora
 // @namespace    http://tampermonkey.net/
-// @version      3.6
+// @version      4.0
 // @description  Auto generate prompt list, bulk download, auto crop 1920x1080
 // @author       Matthew M.
 // @match        *://sora.com/*
+// @updateURL    https://raw.githubusercontent.com/matthewm1805/tampermonkey/main/%F0%9F%A7%A0%20Auto%20Sora.user.js
+// @downloadURL  https://raw.githubusercontent.com/matthewm1805/tampermonkey/main/%F0%9F%A7%A0%20Auto%20Sora.user.js
 // @grant        none
 // ==/UserScript==
 
@@ -52,7 +54,7 @@
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
                 <h3 style="margin: 0; font-size: 16px; display: flex; align-items: center; gap: 8px;">
                     <img src="https://www.svgrepo.com/show/306500/openai.svg" width="20" height="20" style="filter: invert(1);" alt="OpenAI Logo"/>
-                    Auto Sora <span style="font-size: 8px; opacity: 0.7;">3.6</span>
+                    Auto Sora <span style="font-size: 8px; opacity: 0.7;">4.0</span>
                 </h3>
                 <button id="sora-close" style="background: none; border: none; font-size: 16px; cursor: pointer; color: #aaa;">✕</button>
             </div>
@@ -117,17 +119,20 @@
 
         // Chọn tất cả
         document.getElementById('sora-select-all').addEventListener("change", (e) => {
-            selectAllEnabled = e.target.checked;
-            document.querySelectorAll(".sora-image-checkbox").forEach(cb => {
-                const img = cb.parentElement.querySelector("img");
-                cb.checked = selectAllEnabled;
-                if (img) {
-                    if (selectAllEnabled) selectedImageUrls.add(img.src);
-                    else selectedImageUrls.delete(img.src);
-                }
-            });
-            updateSelectedCount();
-        });
+    selectAllEnabled = e.target.checked;
+    selectedImageUrls.clear(); // ✨ Reset toàn bộ lựa chọn
+
+    document.querySelectorAll(".sora-image-checkbox").forEach(cb => {
+        const img = cb.parentElement.querySelector("img");
+        cb.checked = selectAllEnabled;
+        if (img && selectAllEnabled) {
+            selectedImageUrls.add(img.src);
+        }
+    });
+
+    updateSelectedCount();
+});
+
 
         // Progress + cooldown
         const progress = document.createElement('div');
