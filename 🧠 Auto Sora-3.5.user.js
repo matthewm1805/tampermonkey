@@ -426,7 +426,7 @@ ctx.drawImage(
         }, 500);
     }
 
-    waitForElement('textarea[placeholder="Describe your"]', () => {
+    waitForElement('textarea[placeholder*="Describe your"]', () => {
         createUI();
         document.querySelectorAll("a > img").forEach(insertCheckbox);
         observer.observe(document.body, { childList: true, subtree: true });
