@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         🧠 Auto Sora
 // @namespace    http://tampermonkey.net/
-// @version      3.0
-// @description  Tự động generate hình trên Sora, tự động tải hình.
+// @version      3.3
+// @description  AUto generate, bulk download, auto crop 16:9
 // @author       Matthew M.
 // @match        *://sora.com/*
 // @grant        none
@@ -42,29 +42,41 @@
             border: 1px solid rgba(255, 255, 255, 0.1);
             color: #f1f1f1;
             backdrop-filter: blur(10px);
+            opacity: 1;
+            transform: scale(1);
+            transition: all 0.3s ease;
         `;
 
         wrapper.innerHTML = `
+
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
                 <h3 style="margin: 0; font-size: 16px; display: flex; align-items: center; gap: 8px;">
                     <img src="https://www.svgrepo.com/show/306500/openai.svg" width="20" height="20" style="filter: invert(1);" alt="OpenAI Logo"/>
-                    Auto Sora 3.0
+                    Auto Sora 3.3
                 </h3>
                 <button id="sora-close" style="background: none; border: none; font-size: 16px; cursor: pointer; color: #aaa;">✕</button>
             </div>
             <label style="font-size: 14px; color: #ccc;">  Nhập danh sách prompt:</label>
             <textarea rows="6" id="sora-input" placeholder="Mỗi dòng tương ứng với một prompt..." style="width: 100%; padding: 10px; border: 1px solid #444; background: #1a1a1a; border-radius: 8px; resize: none; font-size: 14px; color: #eee;"></textarea>
-            <label style="margin-top: 8px; display: block; font-size: 13px; color: #ccc;">⏱️ Cooldown mỗi prompt (giây):</label>
+            <label style="margin-top: 8px; display: block; font-size: 13px; color: #ccc;">⏱️ Cài đặt thời gian Cooldown (giây):</label>
             <input id="sora-cooldown-time" type="number" min="1" value="130" style="width: 100%; padding: 6px 10px; border: 1px solid #444; background: #111; color: #fff; border-radius: 6px; font-size: 14px; margin-top: 4px;" />
             <div style="margin-top: 12px; display: flex; gap: 8px;">
                 <button id="sora-start" style="flex: 1; background: #1f6feb; color: white; padding: 8px; border: none; border-radius: 8px;">▶  Bắt đầu</button>
                 <button id="sora-clear" style="flex: 1; background: #333; color: #ddd; padding: 8px; border: none; border-radius: 8px;">🗑️ Xóa</button>
             </div>
             <button id="sora-download-images" style="margin-top: 16px; background: #2ea043; color: white; padding: 8px; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; width: 100%;">Tải hình (0)</button>
-            <div style="margin-top: 8px; display: flex; align-items: center; gap: 6px;">
-                <input type="checkbox" id="sora-select-all" />
-                <label for="sora-select-all" style="font-size: 13px; color: #bbb;">Chọn tất cả ảnh hiển thị</label>
-            </div>
+<div style="margin-top: 8px; display: flex; align-items: center; gap: 12px;">
+    <label style="display: flex; align-items: center; gap: 4px; font-size: 13px; color: #bbb;">
+        <input type="checkbox" id="sora-select-all" />
+        Chọn tất cả ảnh hiển thị
+    </label>
+    <label style="display: flex; align-items: center; gap: 4px; font-size: 13px; color: #bbb;">
+        <input type="checkbox" id="sora-crop-169" />
+        Auto crop 16:9
+    </label>
+</div>
+
+
         `;
         document.body.appendChild(wrapper);
 
@@ -78,7 +90,8 @@
             promptQueue = prompts;
             totalPromptCount = prompts.length;
             isRunning = true;
-            wrapper.remove();
+            wrapper.style.display = 'none';
+            document.getElementById('sora-minibtn').style.display = 'none';
             document.getElementById('sora-progress').style.display = 'block';
             document.getElementById('sora-cooldown').style.display = 'block';
             updateProgress();
@@ -89,8 +102,20 @@
             document.getElementById('sora-input').value = '';
         };
 
-        document.getElementById('sora-close').onclick = () => wrapper.remove();
+        // Nút ✕: thêm animation khi ẩn
+        document.getElementById('sora-close').onclick = () => {
+            wrapper.style.opacity = '0';
+            wrapper.style.transform = 'scale(0.9)';
+            setTimeout(() => {
+                wrapper.style.display = 'none';
+                document.getElementById('sora-minibtn').style.display = 'block';
+            }, 300);
+        };
+
+        // Tải hình
         document.getElementById('sora-download-images').onclick = handleDownload;
+
+        // Chọn tất cả
         document.getElementById('sora-select-all').addEventListener("change", (e) => {
             selectAllEnabled = e.target.checked;
             document.querySelectorAll(".sora-image-checkbox").forEach(cb => {
@@ -104,6 +129,7 @@
             updateSelectedCount();
         });
 
+        // Progress + cooldown
         const progress = document.createElement('div');
         progress.id = 'sora-progress';
         progress.style.cssText = `
@@ -141,6 +167,34 @@
         `;
         cooldownBtn.textContent = `⏳ Cooldown: ${cooldownTime}s`;
         document.body.appendChild(cooldownBtn);
+
+        // Nút chấm trắng nhỏ để mở lại bảng điều khiển
+        const miniBtn = document.createElement('div');
+        miniBtn.id = 'sora-minibtn';
+        miniBtn.style.cssText = `
+            position: fixed;
+            bottom: 10px;
+            left: 10px;
+            width: 14px;
+            height: 14px;
+            background: white;
+            border-radius: 50%;
+            cursor: pointer;
+            z-index: 999999;
+            box-shadow: 0 0 6px rgba(255,255,255,0.7);
+            display: none;
+        `;
+        miniBtn.title = 'Mở lại Auto Sora';
+        miniBtn.onclick = () => {
+            wrapper.style.display = 'block';
+            setTimeout(() => {
+                wrapper.style.opacity = '1';
+                wrapper.style.transform = 'scale(1)';
+            }, 10);
+            miniBtn.style.display = 'none';
+        };
+        document.body.appendChild(miniBtn);
+
     }
 
     function updateProgress() {
@@ -220,51 +274,87 @@
         if (btn && !isDownloading) btn.textContent = `Tải hình (${count})`;
     }
 
-    async function handleDownload() {
-        const btn = document.getElementById("sora-download-images");
-        if (!btn) return;
+async function handleDownload() {
+    const btn = document.getElementById("sora-download-images");
+    if (!btn) return;
 
-        if (isDownloading) {
-            isDownloading = false;
-            btn.textContent = `🛑 Đã dừng tải`;
-            return;
-        }
-
-        const urls = Array.from(new Set(selectedImageUrls));
-        if (urls.length === 0) return;
-
-        isDownloading = true;
-        btn.textContent = ` Đang tải ${urls.length} ảnh...`;
-
-        const zip = new JSZip();
-        await Promise.all(urls.map(async (url, i) => {
-            const blob = await convertWebpToPngBlob(url);
-            zip.file(`image_${i + 1}.png`, blob);
-        }));
-
-        const content = await zip.generateAsync({ type: "blob" });
-        const link = document.createElement("a");
-        link.href = URL.createObjectURL(content);
-        link.download = "selected_images_png.zip";
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-
+    if (isDownloading) {
         isDownloading = false;
-        btn.textContent = `✅ Đã tải xong ${urls.length} ảnh`;
-        setTimeout(updateSelectedCount, 2000);
+        btn.textContent = `🛑 Đã dừng tải`;
+        return;
     }
 
-    async function convertWebpToPngBlob(url) {
-        const response = await fetch(url);
-        const webpBlob = await response.blob();
-        const imgBitmap = await createImageBitmap(webpBlob);
-        const canvas = document.createElement("canvas");
-        canvas.width = imgBitmap.width;
-        canvas.height = imgBitmap.height;
-        canvas.getContext("2d").drawImage(imgBitmap, 0, 0);
-        return new Promise(resolve => canvas.toBlob(blob => resolve(blob), "image/png"));
+    const urls = Array.from(new Set(selectedImageUrls));
+    if (urls.length === 0) return;
+
+    isDownloading = true;
+    let completed = 0;
+    btn.textContent = `Tải hình (0/${urls.length})`;
+
+    const zip = new JSZip();
+    await Promise.all(urls.map(async (url, i) => {
+        const blob = await convertWebpToPngBlob(url);
+        zip.file(`image_${i + 1}.png`, blob);
+        completed++;
+        btn.textContent = `Tải hình (${completed}/${urls.length})`;
+    }));
+
+    const content = await zip.generateAsync({ type: "blob" });
+
+    // 👉 Tạo tên file theo thời gian hiện tại
+const now = new Date();
+const pad = n => String(n).padStart(2, '0');
+const filename = `AutoSora_${pad(now.getDate())}-${pad(now.getMonth()+1)}-${String(now.getFullYear()).slice(2)}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.zip`;
+
+
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(content);
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    isDownloading = false;
+    btn.textContent = `✅ Đã tải xong ${urls.length} ảnh`;
+    setTimeout(updateSelectedCount, 2000);
+}
+
+
+async function convertWebpToPngBlob(url) {
+    const response = await fetch(url);
+    const webpBlob = await response.blob();
+    const imgBitmap = await createImageBitmap(webpBlob);
+
+    const cropTo169 = document.getElementById("sora-crop-169")?.checked;
+
+    let cropWidth = imgBitmap.width;
+    let cropHeight = imgBitmap.height;
+
+    if (cropTo169) {
+        const targetRatio = 16 / 9;
+        const currentRatio = cropWidth / cropHeight;
+
+        if (currentRatio > targetRatio) {
+            // ảnh quá rộng → crop chiều ngang
+            cropWidth = cropHeight * targetRatio;
+        } else {
+            // ảnh quá cao → crop chiều cao
+            cropHeight = cropWidth / targetRatio;
+        }
     }
+
+    const canvas = document.createElement("canvas");
+    canvas.width = cropWidth;
+    canvas.height = cropHeight;
+
+    const ctx = canvas.getContext("2d");
+    const sx = (imgBitmap.width - cropWidth) / 2;
+    const sy = (imgBitmap.height - cropHeight) / 2;
+    ctx.drawImage(imgBitmap, sx, sy, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+
+    return new Promise(resolve => canvas.toBlob(blob => resolve(blob), "image/png"));
+}
+
 
     function insertCheckbox(img) {
         const a = img.parentElement;
