@@ -315,7 +315,7 @@ const filename = `AutoSora_${pad(now.getDate())}-${pad(now.getMonth()+1)}-${Stri
     document.body.removeChild(link);
 
     isDownloading = false;
-    btn.textContent = `✅ Đã tải xong ${urls.length} ảnh`;
+    btn.textContent = `Đã tải xong ${urls.length} ảnh`;
     setTimeout(updateSelectedCount, 2000);
 }
 
