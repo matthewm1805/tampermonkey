@@ -210,7 +210,7 @@
     }
 
     function startCountdown() {
-        let timeRemaining = cooldownTime;
+        let timeRemaining = parseInt(document.getElementById('sora-cooldown-time')?.value) || 130;
         const cooldownBtn = document.getElementById('sora-cooldown');
         cooldownBtn.textContent = `⏳ Cooldown: ${timeRemaining}s`;
         if (countdownInterval) clearInterval(countdownInterval);
@@ -252,7 +252,7 @@
                 isRunning = false;
                 updateProgress();
             }
-        }, cooldownTime * 1000);
+        }, (parseInt(document.getElementById('sora-cooldown-time')?.value) || 130) * 1000);
     }
 
     function startLoop() {
