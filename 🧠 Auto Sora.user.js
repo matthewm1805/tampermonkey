@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🧠 Auto Sora
 // @namespace    http://tampermonkey.net/
-// @version      3.5
+// @version      3.6
 // @description  Auto generate prompt list, bulk download, auto crop 1920x1080
 // @author       Matthew M.
 // @match        *://sora.com/*
@@ -52,7 +52,7 @@
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
                 <h3 style="margin: 0; font-size: 16px; display: flex; align-items: center; gap: 8px;">
                     <img src="https://www.svgrepo.com/show/306500/openai.svg" width="20" height="20" style="filter: invert(1);" alt="OpenAI Logo"/>
-                    Auto Sora <span style="font-size: 8px; opacity: 0.7;">3.5</span>
+                    Auto Sora <span style="font-size: 8px; opacity: 0.7;">3.6</span>
                 </h3>
                 <button id="sora-close" style="background: none; border: none; font-size: 16px; cursor: pointer; color: #aaa;">✕</button>
             </div>
