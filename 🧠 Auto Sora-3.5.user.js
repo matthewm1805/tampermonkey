@@ -2,7 +2,7 @@
 // @name         🧠 Auto Sora
 // @namespace    http://tampermonkey.net/
 // @version      3.5
-// @description  Auto generate, bulk download, auto crop 1920x1080
+// @description  Auto generate prompt list, bulk download, auto crop 1920x1080
 // @author       Matthew M.
 // @match        *://sora.com/*
 // @grant        none
