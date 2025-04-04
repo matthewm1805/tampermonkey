@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         🧠 Auto Sora
 // @namespace    http://tampermonkey.net/
-// @version      3.3
-// @description  Auto generate, bulk download, auto crop 16:9
+// @version      3.5
+// @description  Auto generate, bulk download, auto crop 1920x1080
 // @author       Matthew M.
 // @match        *://sora.com/*
 // @grant        none
@@ -52,7 +52,7 @@
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
                 <h3 style="margin: 0; font-size: 16px; display: flex; align-items: center; gap: 8px;">
                     <img src="https://www.svgrepo.com/show/306500/openai.svg" width="20" height="20" style="filter: invert(1);" alt="OpenAI Logo"/>
-                    Auto Sora 3.3
+                    Auto Sora <span style="font-size: 8px; opacity: 0.7;">3.5</span>
                 </h3>
                 <button id="sora-close" style="background: none; border: none; font-size: 16px; cursor: pointer; color: #aaa;">✕</button>
             </div>
@@ -68,11 +68,11 @@
 <div style="margin-top: 8px; display: flex; align-items: center; gap: 12px;">
     <label style="display: flex; align-items: center; gap: 4px; font-size: 13px; color: #bbb;">
         <input type="checkbox" id="sora-select-all" />
-        Chọn tất cả ảnh hiển thị
+        Chọn tất cả ảnh
     </label>
     <label style="display: flex; align-items: center; gap: 4px; font-size: 13px; color: #bbb;">
         <input type="checkbox" id="sora-crop-169" />
-        Auto crop 16:9
+        Auto crop 1920x1080
     </label>
 </div>
 
@@ -343,14 +343,23 @@ async function convertWebpToPngBlob(url) {
         }
     }
 
-    const canvas = document.createElement("canvas");
-    canvas.width = cropWidth;
-    canvas.height = cropHeight;
+const canvas = document.createElement("canvas");
+const targetWidth = 1920;
+const targetHeight = 1080;
 
-    const ctx = canvas.getContext("2d");
-    const sx = (imgBitmap.width - cropWidth) / 2;
-    const sy = (imgBitmap.height - cropHeight) / 2;
-    ctx.drawImage(imgBitmap, sx, sy, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+const ctx = canvas.getContext("2d");
+canvas.width = cropTo169 ? targetWidth : cropWidth;
+canvas.height = cropTo169 ? targetHeight : cropHeight;
+
+const sx = (imgBitmap.width - cropWidth) / 2;
+const sy = (imgBitmap.height - cropHeight) / 2;
+
+// Nếu crop, thì vẽ và resize về 1920x1080
+ctx.drawImage(
+    imgBitmap,
+    sx, sy, cropWidth, cropHeight,           // source crop
+    0, 0, canvas.width, canvas.height        // target size (resize nếu cropTo169)
+);
 
     return new Promise(resolve => canvas.toBlob(blob => resolve(blob), "image/png"));
 }
