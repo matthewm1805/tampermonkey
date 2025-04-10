@@ -1,10 +1,11 @@
 // ==UserScript==
 // @name         AUTO CODESIM
 // @namespace    http://tampermonkey.net/
-// @version      1.0
-// @description  Lấy OTP từ codesim.net (API Fix, Continuous Polling, Keep Info, Auto Copy, Hỗ trợ TK, Minimize, Click-to-Copy) trên automusic.win
+// @version      1.1
+// @description  Lấy OTP từ codesim.net
 // @author       Matthew M.
-// @match        https://automusic.win/*
+// @match        *://automusic.win/*
+// @match        *://*.automusic.win/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -277,7 +278,7 @@
         const getOtpButton = document.createElement('button');
         getOtpButton.id = 'codesim-get-otp';
         getOtpButton.className = 'button primary';
-        getOtpButton.textContent = 'Lấy Số & OTP';
+        getOtpButton.textContent = 'Lấy số mới';
         getOtpButton.onclick = handleGetOtpClick;
         getOtpButton.disabled = true;
         buttonGroup.appendChild(getOtpButton);
@@ -294,20 +295,13 @@
         infoDiv.id = 'codesim-info';
         const phoneDisplayP = document.createElement('p');
         phoneDisplayP.id = 'codesim-phone';
-        phoneDisplayP.innerHTML = '<strong>SĐT:</strong> <span class="copyable-text" title="Nhấn để copy SĐT">N/A</span>';
+        phoneDisplayP.innerHTML = '<strong>SĐT:</strong> <span class="non-clickable-text">N/A</span>';
         infoDiv.appendChild(phoneDisplayP);
         const otpDisplayP = document.createElement('p');
         otpDisplayP.id = 'codesim-otp';
-        otpDisplayP.innerHTML = '<strong>OTP:</strong> <span class="copyable-text" title="Nhấn để copy OTP">N/A</span>';
+        otpDisplayP.innerHTML = '<strong>OTP:</strong> <span class="non-clickable-text">N/A</span>';
         infoDiv.appendChild(otpDisplayP);
         contentWrapper.appendChild(infoDiv);
-
-        infoDiv.querySelectorAll('.copyable-text').forEach(span => {
-            span.onclick = (event) => {
-                const textToCopy = event.target.textContent;
-                copyToClipboard(textToCopy, "Đã copy:");
-            };
-        });
 
         const statusDisplay = document.createElement('div');
         statusDisplay.id = 'codesim-status';
@@ -386,12 +380,9 @@
                 align-items: center;
             }
             #codesim-info p strong { color: #555; margin-right: 5px; min-width: 40px; display: inline-block; }
-            #codesim-info p span.copyable-text {
-                font-weight: 600; color: #007bff; margin-right: 8px; cursor: pointer;
-                padding: 2px 4px; border-radius: 3px; transition: background-color 0.2s;
-            }
-            #codesim-info p span.copyable-text:hover {
-                background-color: #e7f3ff;
+            #codesim-info p span.non-clickable-text {
+                font-weight: 600; color: #007bff; margin-right: 8px;
+                padding: 2px 4px; border-radius: 3px;
             }
             .status-message {
                 margin-top: 15px; font-weight: 500; padding: 8px; border-radius: 4px;
@@ -403,7 +394,7 @@
             .status-message.loading { background-color: #e2e3e5; color: #383d41; border-color: #d6d8db;}
             #codesim-balance-main {
                 text-align: right; font-size: 13px; color: #888; margin-bottom: 10px;
-                font/weight: 500; height: 1.2em;
+                font-weight: 500; height: 1.2em;
             }
         `);
     }
@@ -648,8 +639,8 @@
         const phonePrefixInput = document.getElementById('codesim-phone-prefix');
         const getOtpButton = document.getElementById('codesim-get-otp');
         const cancelButton = document.getElementById('codesim-cancel');
-        const phoneDisplaySpan = document.querySelector('#codesim-phone span.copyable-text');
-        const otpDisplaySpan = document.querySelector('#codesim-otp span.copyable-text');
+        const phoneDisplaySpan = document.querySelector('#codesim-phone span.non-clickable-text');
+        const otpDisplaySpan = document.querySelector('#codesim-otp span.non-clickable-text');
 
         if (!serviceSelect || !networkSelect || !phonePrefixInput || !getOtpButton || !cancelButton || !phoneDisplaySpan || !otpDisplaySpan) {
             console.error("[CodeSim] UI element missing for Get OTP action!");
@@ -697,7 +688,7 @@
                 fetchBalanceForCurrentAccount();
             },
             (errorMsg) => {
-                showStatus(`Lỗi lấy số: ${errorMsg}`, true);
+                showStatus(`Hãy hủy phiên chưa xong trên website`, true);
                 resetOtpState(false);
             }
         );
@@ -709,7 +700,7 @@
             return;
         }
 
-        const otpDisplaySpan = document.querySelector('#codesim-otp span.copyable-text');
+        const otpDisplaySpan = document.querySelector('#codesim-otp span.non-clickable-text');
         if (!otpDisplaySpan) {
             console.error("[CodeSim] OTP display element missing during status check!");
             pollingTimeoutId = setTimeout(checkOtpStatus, POLLING_INTERVAL_PENDING);
@@ -794,8 +785,8 @@
 
         const getOtpButton = document.getElementById('codesim-get-otp');
         const cancelButton = document.getElementById('codesim-cancel');
-        const phoneDisplaySpan = document.querySelector('#codesim-phone span.copyable-text');
-        const otpDisplaySpan = document.querySelector('#codesim-otp span.copyable-text');
+        const phoneDisplaySpan = document.querySelector('#codesim-phone span.non-clickable-text');
+        const otpDisplaySpan = document.querySelector('#codesim-otp span.non-clickable-text');
         const phonePrefixInput = document.getElementById('codesim-phone-prefix');
         const serviceSelect = document.getElementById('codesim-service-select');
         const networkSelect = document.getElementById('codesim-network-select');
