@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         🧠 Auto Sora
 // @namespace    http://tampermonkey.net/
-// @version      4.3.1
-// @description  Auto generate prompt list, bulk download (PNG, multithreaded), single file download, auto crop (16:9, 9:16, 1:1), H/V/Square filter
+// @version      4.8
+// @description  Auto generate prompt list, bulk download (PNG, multithreaded), single file download, auto crop (16:9, 9:16, 1:1), H/V/Square filter, Stop button, Find Similar Image (background tab), Glass UI
 // @author       Matthew M.
 // @match        *://sora.com/*
 // @match        *://www.sora.com/*
@@ -18,1025 +18,116 @@
     // --- Global Variables ---
     let promptQueue = [];
     let totalPromptCount = 0;
-    let isRunning = false; // Flag for prompt generation process
+    let isRunning = false;
     let countdownInterval = null;
-    let cooldownTime = 130; // Default cooldown time in seconds
-
-    let selectedImageUrls = new Set(); // Stores URLs of images selected for download
-    let isDownloading = false; // Flag for download process
+    let cooldownTime = 130;
+    let selectedImageUrls = new Set();
+    let isDownloading = false;
     let downloadErrors = 0;
+    let isFindSimilarModeActive = false;
 
-    // --- Utility Functions ---
-    function log(msg) {
-        console.log(`[Auto Sora v4.3.1] ${msg}`); // Updated version in log
-    }
+    function log(msg) { console.log(`[Auto Sora v4.8] ${msg}`); }
+    function getTimestamp() { const now = new Date(); const pad = n => String(n).padStart(2, '0'); return `${pad(now.getDate())}${pad(now.getMonth() + 1)}${String(now.getFullYear()).slice(2)}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`; }
+    function triggerDownload(blob, filename) { const link = document.createElement("a"); link.href = URL.createObjectURL(blob); link.download = filename; document.body.appendChild(link); link.click(); document.body.removeChild(link); URL.revokeObjectURL(link.href); log(`Triggered download for ${filename}`); }
 
-    // --- Image Selection Logic (Based on Orientation Filters) ---
-    function updateImageSelection() {
-        log("Updating image selections based on H/V/Square filters...");
-        try {
-            // Get the state of the orientation filter checkboxes
-            const filterHorizState = document.getElementById('sora-select-horizontal')?.checked ?? false;
-            const filterVertState = document.getElementById('sora-select-vertical')?.checked ?? false;
-            const filterSquareState = document.getElementById('sora-select-square')?.checked ?? false;
-            selectedImageUrls.clear(); // Clear current selection before re-evaluating
+    function updateImageSelection() { log("Updating image selections based on H/V/Square filters..."); try { const filterHorizState = document.getElementById('sora-select-horizontal')?.checked ?? false; const filterVertState = document.getElementById('sora-select-vertical')?.checked ?? false; const filterSquareState = document.getElementById('sora-select-square')?.checked ?? false; selectedImageUrls.clear(); document.querySelectorAll(".sora-image-wrapper").forEach(wrapper => { const checkbox = wrapper.querySelector(".sora-image-checkbox"); const img = wrapper.querySelector("img"); if (!checkbox || !img) return; const imgWidth = (img.complete && img.naturalWidth > 0) ? img.naturalWidth : img.width; const imgHeight = (img.complete && img.naturalHeight > 0) ? img.naturalHeight : img.height; let checkThisBox = false; if (img.complete && imgWidth > 0 && imgHeight > 0) { const isHoriz = imgWidth > imgHeight; const isVert = imgHeight > imgWidth; const isSquare = imgWidth === imgHeight; if (!filterHorizState && !filterVertState && !filterSquareState) { checkThisBox = false; } else { checkThisBox = (filterHorizState && isHoriz) || (filterVertState && isVert) || (filterSquareState && isSquare); } checkbox.checked = checkThisBox; if (checkThisBox) { selectedImageUrls.add(img.src); } } else if (!img.complete) { checkThisBox = checkbox.checked; if (checkThisBox) { selectedImageUrls.add(img.src); } } else { checkbox.checked = false; if (selectedImageUrls.has(img.src)) { selectedImageUrls.delete(img.src); } log(`Image ${img.src.substring(0,30)}... has invalid dimensions (${imgWidth}x${imgHeight}) after loading.`); } }); updateSelectedCount(); log(`Selection updated. ${selectedImageUrls.size} images selected based on filters.`); } catch (e) { log("Error during image selection update:"); console.error(e); } }
 
-            // Iterate through all image wrappers on the page
-            document.querySelectorAll(".sora-image-wrapper").forEach(wrapper => {
-                const checkbox = wrapper.querySelector(".sora-image-checkbox");
-                const img = wrapper.querySelector("img");
-                if (!checkbox || !img) return; // Skip if elements are missing
-
-                // Use naturalWidth/Height for accurate dimensions if image is loaded
-                const imgWidth = (img.complete && img.naturalWidth > 0) ? img.naturalWidth : img.width;
-                const imgHeight = (img.complete && img.naturalHeight > 0) ? img.naturalHeight : img.height;
-                let checkThisBox = false;
-
-                // Only apply filters if image dimensions are valid
-                if (img.complete && imgWidth > 0 && imgHeight > 0) {
-                    const isHoriz = imgWidth > imgHeight;
-                    const isVert = imgHeight > imgWidth;
-                    const isSquare = imgWidth === imgHeight;
-
-                    // Determine if the checkbox should be checked based on active filters
-                    if (!filterHorizState && !filterVertState && !filterSquareState) {
-                        checkThisBox = false; // Keep unchecked if no filters are active
-                    } else {
-                        checkThisBox = (filterHorizState && isHoriz) || (filterVertState && isVert) || (filterSquareState && isSquare);
-                    }
-                    checkbox.checked = checkThisBox; // Set checkbox state
-                    if (checkThisBox) {
-                        selectedImageUrls.add(img.src); // Add URL to the selection set
-                    }
-                } else if (!img.complete) {
-                    // If image not loaded yet, keep its current manual state temporarily
-                    checkThisBox = checkbox.checked;
-                    if (checkThisBox) {
-                        selectedImageUrls.add(img.src); // Re-add if it was manually checked
-                    }
-                } else {
-                    // Image loaded but dimensions are invalid - keep unchecked
-                    checkbox.checked = false;
-                    log(`Image ${img.src.substring(0,30)}... has invalid dimensions (${imgWidth}x${imgHeight}) after loading.`);
-                }
-            });
-
-            updateSelectedCount(); // Update the download button text/state
-            log(`Selection updated. ${selectedImageUrls.size} images selected based on filters.`);
-        } catch (e) {
-            log("Error during image selection update:");
-            console.error(e);
-        }
-    }
-
-    // --- UI Creation ---
     function createUI() {
-        const wrapper = document.createElement('div');
-        wrapper.id = 'sora-auto-ui';
-        // --- Styling for the main UI panel ---
-        wrapper.style.cssText = `
-            position: fixed; bottom: 8px; left: 20px; background: rgba(25, 25, 25, 0.96);
-            padding: 18px; border-radius: 16px; z-index: 999999;
-            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5); width: 320px;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            border: 1px solid rgba(255, 255, 255, 0.1); color: #f1f1f1;
-            backdrop-filter: blur(10px); opacity: 1; transform: scale(1);
-            transition: all 0.3s ease;
-        `;
-
-        // --- Inner HTML for the UI panel ---
+        const wrapper = document.createElement('div'); wrapper.id = 'sora-auto-ui';
+        wrapper.style.cssText = `position: fixed; bottom: 15px; left: 20px; background: rgba(35, 35, 40, 0.65); backdrop-filter: blur(10px) saturate(180%); -webkit-backdrop-filter: blur(10px) saturate(180%); padding: 20px 20px 15px 20px; border-radius: 16px; z-index: 999999; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.37); width: 330px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; border: 1px solid rgba(255, 255, 255, 0.12); color: #e0e0e0; transition: opacity 0.3s ease, transform 0.3s ease; opacity: 1; transform: scale(1); display: block;`;
         wrapper.innerHTML = `
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-                <h3 style="margin: 0; font-size: 16px; display: flex; align-items: center; gap: 8px;">
-                    <img src="https://www.svgrepo.com/show/306500/openai.svg" width="20" height="20" style="filter: invert(1);" alt="OpenAI Logo"/>
-                    Auto Sora <span style="font-size: 8px; opacity: 0.7;">build 4.3.1</span> </h3>
-                <button id="sora-close" style="background: none; border: none; font-size: 16px; cursor: pointer; color: #aaa;" title="Đóng bảng điều khiển">✕</button>
-            </div>
-
-            <label style="font-size: 14px; color: #ccc;">Nhập danh sách prompt:</label>
-            <textarea rows="5" id="sora-input" placeholder="Mỗi dòng tương ứng với một prompt..." style="width: 100%; padding: 10px; border: 1px solid #444; background: #1a1a1a; border-radius: 8px; resize: none; font-size: 14px; color: #eee; margin-top: 4px; box-sizing: border-box;"></textarea>
-            <label style="margin-top: 10px; display: block; font-size: 13px; color: #ccc;">⏱ Thời gian Cooldown (giây):</label>
-            <input id="sora-cooldown-time" type="number" min="1" value="${cooldownTime}" style="width: 100%; padding: 6px 10px; border: 1px solid #444; background: #111; color: #fff; border-radius: 6px; font-size: 14px; margin-top: 4px; box-sizing: border-box;" />
-            <div style="margin-top: 12px; display: flex; gap: 8px;">
-                <button id="sora-start" style="flex: 1; background: #1f6feb; color: white; padding: 8px; border: none; border-radius: 8px; cursor: pointer; font-weight: 500;">▶ Bắt đầu</button>
-                <button id="sora-clear" style="flex: 1; background: #333; color: #ddd; padding: 8px; border: none; border-radius: 8px; cursor: pointer;">🗑️ Xóa</button>
-            </div>
-
-            <hr style="border: none; border-top: 1px solid rgba(255, 255, 255, 0.1); margin: 16px 0;" />
-
-            <div style="font-size: 13px; color: #bbb; margin-bottom: 10px;">Chọn ảnh tải về:</div>
-            <div style="display: flex; gap: 15px; margin-bottom: 10px; flex-wrap: wrap; justify-content: flex-start; align-items: center;">
-                <label title="Chỉ chọn các ảnh có chiều ngang lớn hơn chiều dọc" style="display: flex; align-items: center; gap: 6px; font-size: 13px; color: #bbb; cursor: pointer;">
-                    <input type="checkbox" id="sora-select-horizontal" style="transform: scale(1.1); cursor: pointer; accent-color: #1f6feb;" /> Ảnh ngang
-                </label>
-                <label title="Chỉ chọn các ảnh có chiều dọc lớn hơn chiều ngang" style="display: flex; align-items: center; gap: 6px; font-size: 13px; color: #bbb; cursor: pointer;">
-                    <input type="checkbox" id="sora-select-vertical" style="transform: scale(1.1); cursor: pointer; accent-color: #1f6feb;" /> Ảnh dọc
-                </label>
-                <label title="Chỉ chọn các ảnh có chiều rộng bằng chiều cao" style="display: flex; align-items: center; gap: 6px; font-size: 13px; color: #bbb; cursor: pointer;">
-                    <input type="checkbox" id="sora-select-square" style="transform: scale(1.1); cursor: pointer; accent-color: #1f6feb;" /> Ảnh vuông
-                </label>
-            </div>
-
-            <hr style="border: none; border-top: 1px solid rgba(255, 255, 255, 0.08); margin: 12px 0;" />
-
-            <div style="font-size: 13px; color: #bbb; margin-bottom: 8px;">Tùy chọn Crop ảnh khi tải:</div>
-            <div id="sora-crop-options" style="display: flex; flex-direction: row; flex-wrap: wrap; gap: 10px; margin-bottom: 10px;">
-                <label style="display: flex; align-items: center; gap: 4px; font-size: 13px; color: #bbb; cursor: pointer;"> <input type="radio" name="sora-crop-option" value="none" checked style="cursor: pointer; accent-color: #1f6feb; transform: scale(1.1);" /> Gốc
-                </label>
-                <label style="display: flex; align-items: center; gap: 4px; font-size: 13px; color: #bbb; cursor: pointer;">
-                    <input type="radio" name="sora-crop-option" value="16:9" style="cursor: pointer; accent-color: #1f6feb; transform: scale(1.1);" /> 16:9
-                </label>
-                <label style="display: flex; align-items: center; gap: 4px; font-size: 13px; color: #bbb; cursor: pointer;">
-                    <input type="radio" name="sora-crop-option" value="9:16" style="cursor: pointer; accent-color: #1f6feb; transform: scale(1.1);" /> 9:16
-                </label>
-                <label style="display: flex; align-items: center; gap: 4px; font-size: 13px; color: #bbb; cursor: pointer;">
-                    <input type="radio" name="sora-crop-option" value="1:1" style="cursor: pointer; accent-color: #1f6feb; transform: scale(1.1);" /> 1:1
-                </label>
-            </div>
-
-            <button id="sora-download-images" style="margin-top: 12px; background: #2ea043; color: white; padding: 9px; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px; transition: background-color 0.2s ease; font-weight: 500;">
-                 <span id="sora-download-icon" style="display: inline;"></span>
-                 <span id="sora-download-text">Tải hình (0)</span>
-            </button>
-            <div id="sora-download-progress" style="display: none;"></div> <div id="sora-download-error" style="font-size: 11px; color: #ffa0a0; text-align: center; margin-top: 5px; min-height: 14px;"></div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;"> <h3 style="margin: 0; font-size: 17px; display: flex; align-items: center; gap: 10px; color: #ffffff; font-weight: 500;"> <img src="https://www.svgrepo.com/show/306500/openai.svg" width="22" height="22" style="filter: invert(1);" alt="OpenAI Logo"/> Auto Sora <span style="font-size: 9px; opacity: 0.6; font-weight: 300; margin-left: -5px;">build 4.8</span> </h3> <button id="sora-close" style=" background: rgba(80, 80, 80, 0.4); backdrop-filter: blur(5px) saturate(150%); -webkit-backdrop-filter: blur(5px) saturate(150%); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px; padding: 2px 6px; font-size: 16px; color: rgba(255, 255, 255, 0.7); cursor: pointer; transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease; " onmouseover="this.style.backgroundColor='rgba(100, 100, 100, 0.6)'; this.style.color='rgba(255, 255, 255, 0.9)'; this.style.borderColor='rgba(255, 255, 255, 0.15)'" onmouseout="this.style.backgroundColor='rgba(80, 80, 80, 0.4)'; this.style.color='rgba(255, 255, 255, 0.7)'; this.style.borderColor='rgba(255, 255, 255, 0.1)'" title="Đóng bảng điều khiển">✕</button> </div>
+            <label style="font-size: 13px; color: #bdbdbd; font-weight: 400; margin-bottom: 5px; display: block;">Nhập danh sách prompt:</label> <textarea rows="5" id="sora-input" placeholder="Mỗi dòng tương ứng với một prompt..." style="width: 100%; padding: 12px; border: 1px solid rgba(255, 255, 255, 0.1); background: rgba(0, 0, 0, 0.25); border-radius: 10px; resize: vertical; font-size: 14px; color: #e0e0e0; margin-top: 0px; margin-bottom: 12px; box-sizing: border-box; min-height: 80px;"></textarea>
+            <label style="display: block; font-size: 13px; color: #bdbdbd; font-weight: 400; margin-bottom: 5px;">⏱ Thời gian Cooldown (giây):</label> <input id="sora-cooldown-time" type="number" min="1" value="${cooldownTime}" style="width: 100%; padding: 8px 12px; border: 1px solid rgba(255, 255, 255, 0.1); background: rgba(0, 0, 0, 0.25); color: #e0e0e0; border-radius: 10px; font-size: 14px; margin-top: 0px; box-sizing: border-box; margin-bottom: 15px;" />
+            <div style="display: flex; gap: 10px; margin-bottom: 20px;"> <button id="sora-start" style=" flex: 1; background: rgba(60, 130, 250, 0.5); backdrop-filter: blur(5px) saturate(150%); -webkit-backdrop-filter: blur(5px) saturate(150%); color: white; padding: 10px; border: 1px solid rgba(60, 130, 250, 0.6); border-radius: 10px; cursor: pointer; font-weight: 500; transition: background-color 0.2s ease, border-color 0.2s ease; " onmouseover="this.style.backgroundColor='rgba(60, 130, 250, 0.7)'; this.style.borderColor='rgba(60, 130, 250, 0.8)'" onmouseout="this.style.backgroundColor='rgba(60, 130, 250, 0.5)'; this.style.borderColor='rgba(60, 130, 250, 0.6)'">▶ Bắt đầu</button> <button id="sora-clear" style=" flex: 1; background: rgba(80, 80, 80, 0.5); backdrop-filter: blur(5px) saturate(150%); -webkit-backdrop-filter: blur(5px) saturate(150%); color: #d0d0d0; padding: 10px; border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 10px; cursor: pointer; transition: background-color 0.2s ease, border-color 0.2s ease; " onmouseover="this.style.backgroundColor='rgba(100, 100, 100, 0.6)'; this.style.borderColor='rgba(255, 255, 255, 0.2)'" onmouseout="this.style.backgroundColor='rgba(80, 80, 80, 0.5)'; this.style.borderColor='rgba(255, 255, 255, 0.15)'">🗑️ Xóa</button> </div>
+            <hr style="border: none; border-top: 1px solid rgba(255, 255, 255, 0.1); margin: 18px 0;" />
+            <div style="font-size: 13px; color: #bdbdbd; margin-bottom: 12px; font-weight: 400;">Chọn ảnh tải về:</div> <div style="display: flex; gap: 18px; margin-bottom: 15px; flex-wrap: wrap; justify-content: flex-start; align-items: center;"> <label title="Chỉ chọn các ảnh có chiều ngang lớn hơn chiều dọc" style="display: flex; align-items: center; gap: 7px; font-size: 13px; color: #d0d0d0; cursor: pointer;"> <input type="checkbox" id="sora-select-horizontal" style="transform: scale(1.1); cursor: pointer; accent-color: #4a90e2;" /> Ảnh ngang </label> <label title="Chỉ chọn các ảnh có chiều dọc lớn hơn chiều ngang" style="display: flex; align-items: center; gap: 7px; font-size: 13px; color: #d0d0d0; cursor: pointer;"> <input type="checkbox" id="sora-select-vertical" style="transform: scale(1.1); cursor: pointer; accent-color: #4a90e2;" /> Ảnh dọc </label> <label title="Chỉ chọn các ảnh có chiều rộng bằng chiều cao" style="display: flex; align-items: center; gap: 7px; font-size: 13px; color: #d0d0d0; cursor: pointer;"> <input type="checkbox" id="sora-select-square" style="transform: scale(1.1); cursor: pointer; accent-color: #4a90e2;" /> Ảnh vuông </label> </div>
+            <hr style="border: none; border-top: 1px solid rgba(255, 255, 255, 0.08); margin: 18px 0;" />
+            <div style="font-size: 13px; color: #bdbdbd; margin-bottom: 10px; font-weight: 400;">Tùy chọn Crop ảnh khi tải:</div> <div id="sora-crop-options" style="display: flex; flex-direction: row; flex-wrap: wrap; gap: 15px; margin-bottom: 15px;"> <label style="display: flex; align-items: center; gap: 5px; font-size: 13px; color: #d0d0d0; cursor: pointer;"> <input type="radio" name="sora-crop-option" value="none" checked style="cursor: pointer; accent-color: #4a90e2; transform: scale(1.1);" /> Gốc </label> <label style="display: flex; align-items: center; gap: 5px; font-size: 13px; color: #d0d0d0; cursor: pointer;"> <input type="radio" name="sora-crop-option" value="16:9" style="cursor: pointer; accent-color: #4a90e2; transform: scale(1.1);" /> 16:9 </label> <label style="display: flex; align-items: center; gap: 5px; font-size: 13px; color: #d0d0d0; cursor: pointer;"> <input type="radio" name="sora-crop-option" value="9:16" style="cursor: pointer; accent-color: #4a90e2; transform: scale(1.1);" /> 9:16 </label> <label style="display: flex; align-items: center; gap: 5px; font-size: 13px; color: #d0d0d0; cursor: pointer;"> <input type="radio" name="sora-crop-option" value="1:1" style="cursor: pointer; accent-color: #4a90e2; transform: scale(1.1);" /> 1:1 </label> </div>
+            <div style="display: flex; gap: 10px; margin-top: 20px; align-items: stretch;"> <button id="sora-download-images" style=" flex-grow: 1; background: rgba(46, 160, 67, 0.5); backdrop-filter: blur(5px) saturate(150%); -webkit-backdrop-filter: blur(5px) saturate(150%); color: white; padding: 11px; border: 1px solid rgba(46, 160, 67, 0.6); border-radius: 10px; cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center; gap: 8px; transition: background-color 0.2s ease, border-color 0.2s ease, opacity 0.2s ease; font-weight: 500; " onmouseover="if(!this.disabled) { this.style.backgroundColor='rgba(46, 160, 67, 0.7)'; this.style.borderColor='rgba(46, 160, 67, 0.8)'; }" onmouseout="if(!this.disabled) { this.style.backgroundColor='rgba(46, 160, 67, 0.5)'; this.style.borderColor='rgba(46, 160, 67, 0.6)'; }"> <svg id="sora-download-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-download" viewBox="0 0 16 16" style="display: inline;"> <path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5"/> <path d="M7.646 11.854a.5.5 0 0 0 .708 0l3-3a.5.5 0 0 0-.708-.708L8.5 10.293V1.5a.5.5 0 0 0-1 0v8.793L5.354 8.146a.5.5 0 1 0-.708.708z"/> </svg> <span id="sora-download-text">Tải hình (0)</span> </button> <button id="sora-find-similar-button" title="Kích hoạt chế độ tìm ảnh tương tự" style=" flex-shrink: 0; background: rgba(80, 80, 90, 0.5); backdrop-filter: blur(5px) saturate(150%); -webkit-backdrop-filter: blur(5px) saturate(150%); color: white; padding: 11px 14px; border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 10px; cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center; transition: background-color 0.2s ease, border-color 0.2s ease; " onmouseover="if(!this.classList.contains('active')) { this.style.backgroundColor='rgba(100, 100, 110, 0.6)'; this.style.borderColor='rgba(255, 255, 255, 0.2)'; }" onmouseout="if(!this.classList.contains('active')) { this.style.backgroundColor='rgba(80, 80, 90, 0.5)'; this.style.borderColor='rgba(255, 255, 255, 0.15)'; }"> <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-cursor-fill" viewBox="0 0 16 16"> <path d="M14.082 2.182a.5.5 0 0 1 .103.557L8.528 15.467a.5.5 0 0 1-.917-.007L5.57 10.694.803 8.652a.5.5 0 0 1-.006-.916l12.728-5.657a.5.5 0 0 1 .556.103z"/> </svg> </button> </div>
+            <style> #sora-download-images:disabled { background: rgba(80, 80, 80, 0.3) !important; border-color: rgba(255, 255, 255, 0.08) !important; color: rgba(255, 255, 255, 0.4) !important; backdrop-filter: blur(2px) saturate(100%); -webkit-backdrop-filter: blur(2px) saturate(100%); opacity: 0.6; cursor: not-allowed; } #sora-find-similar-button.active { background-color: rgba(60, 130, 250, 0.65) !important; border-color: rgba(60, 130, 250, 0.8) !important; } </style>
+            <div id="sora-download-progress" style="display: none;"></div>
+            <div id="sora-download-error" style="font-size: 11px; color: #ff8a8a; text-align: center; margin-top: 5px; font-weight: 400;"></div>
         `;
         document.body.appendChild(wrapper);
-
-        // --- Event Listeners for UI Elements ---
-        document.getElementById('sora-start').onclick = handleStart;
-        document.getElementById('sora-clear').onclick = handleClear;
-        document.getElementById('sora-close').onclick = handleClose;
-        document.getElementById('sora-download-images').onclick = handleDownload;
-
-        // Orientation filter listeners
-        document.getElementById('sora-select-horizontal').addEventListener('change', updateImageSelection);
-        document.getElementById('sora-select-vertical').addEventListener('change', updateImageSelection);
-        document.getElementById('sora-select-square').addEventListener('change', updateImageSelection);
-
-        // --- Create Progress/Cooldown/Mini Button UI Elements (Initially Hidden) ---
+        let isDragging = false; let offsetX, offsetY; function dragMouseDown(e) { if (e.button !== 0) return; const targetTagName = e.target.tagName.toLowerCase(); const isInteractive = ['input', 'button', 'textarea', 'svg', 'span'].includes(targetTagName) || e.target.closest('button, input, textarea, a, label[style*="cursor: pointer"]'); if (isInteractive) { return; } isDragging = true; wrapper.style.cursor = 'grabbing'; const rect = wrapper.getBoundingClientRect(); offsetX = e.clientX - rect.left; offsetY = e.clientY - rect.top; wrapper.style.bottom = 'auto'; wrapper.style.top = `${rect.top}px`; wrapper.style.left = `${rect.left}px`; document.addEventListener('mousemove', elementDrag); document.addEventListener('mouseup', closeDragElement); e.preventDefault(); } function elementDrag(e) { if (isDragging) { e.preventDefault(); const newTop = e.clientY - offsetY; const newLeft = e.clientX - offsetX; wrapper.style.top = `${newTop}px`; wrapper.style.left = `${newLeft}px`; } } function closeDragElement() { if (isDragging) { isDragging = false; wrapper.style.cursor = 'grab'; document.removeEventListener('mousemove', elementDrag); document.removeEventListener('mouseup', closeDragElement); } } wrapper.addEventListener('mousedown', dragMouseDown); wrapper.style.cursor = 'grab';
+        document.getElementById('sora-start').onclick = handleStart; document.getElementById('sora-clear').onclick = handleClear; document.getElementById('sora-close').onclick = handleClose; document.getElementById('sora-download-images').onclick = handleDownload; document.getElementById('sora-find-similar-button').onclick = toggleFindSimilarMode;
+        document.getElementById('sora-select-horizontal').addEventListener('change', updateImageSelection); document.getElementById('sora-select-vertical').addEventListener('change', updateImageSelection); document.getElementById('sora-select-square').addEventListener('change', updateImageSelection);
         createAuxiliaryUI();
     }
 
-    // --- Create Auxiliary UI (Progress, Cooldown, Mini Button) ---
-    function createAuxiliaryUI() {
-        // Progress Indicator
-        const progress = document.createElement('div');
-        progress.id = 'sora-progress';
-        progress.style.cssText = `
-            position: fixed; bottom: 20px; left: 20px; background: rgba(25, 25, 25, 0.9);
-            border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; padding: 8px 16px;
-            font-size: 14px; z-index: 999999; display: none; color: #eee; backdrop-filter: blur(8px);
-        `;
-        progress.textContent = 'Đang xử lý...';
-        document.body.appendChild(progress);
+    function createAuxiliaryUI() { const auxContainer = document.createElement('div'); auxContainer.id = 'sora-aux-controls-container'; auxContainer.style.cssText = `position: fixed; bottom: 15px; left: 20px; z-index: 999998; display: none; align-items: center; gap: 10px; transition: opacity 0.3s ease; opacity: 1;`; const glassItemStyle = `background: rgba(45, 45, 50, 0.7); backdrop-filter: blur(8px) saturate(150%); -webkit-backdrop-filter: blur(8px) saturate(150%); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 10px; padding: 8px 14px; font-size: 13px; color: #d5d5d5; display: none; white-space: nowrap; box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2); transition: background-color 0.2s ease, border-color 0.2s ease;`; const progress = document.createElement('div'); progress.id = 'sora-progress'; progress.style.cssText = glassItemStyle; progress.textContent = 'Đang xử lý...'; auxContainer.appendChild(progress); const cooldownBtn = document.createElement('button'); cooldownBtn.id = 'sora-cooldown'; cooldownBtn.style.cssText = glassItemStyle + `cursor: default;`; cooldownBtn.textContent = `⏳ Cooldown: ${cooldownTime}s`; auxContainer.appendChild(cooldownBtn); const stopBtn = document.createElement('button'); stopBtn.id = 'sora-stop-button'; stopBtn.style.cssText = glassItemStyle + `background: rgba(200, 50, 60, 0.7); border-color: rgba(255, 99, 132, 0.4); color: white; cursor: pointer; font-weight: 500;`; stopBtn.textContent = '🛑 Dừng'; stopBtn.title = 'Dừng gửi prompt và lưu các prompt còn lại'; stopBtn.onclick = handleStop; stopBtn.onmouseover = function() { this.style.backgroundColor='rgba(220, 53, 69, 0.8)'; this.style.borderColor='rgba(255, 99, 132, 0.6)'; }; stopBtn.onmouseout = function() { this.style.backgroundColor='rgba(200, 50, 60, 0.7)'; this.style.borderColor='rgba(255, 99, 132, 0.4)'; }; auxContainer.appendChild(stopBtn); document.body.appendChild(auxContainer); const miniBtn = document.createElement('div'); miniBtn.id = 'sora-minibtn'; miniBtn.style.cssText = `position: fixed; bottom: 15px; left: 20px; width: 16px; height: 16px; background: rgba(255, 255, 255, 0.8); border-radius: 50%; cursor: pointer; z-index: 999999; box-shadow: 0 0 8px rgba(255, 255, 255, 0.5); display: none; border: 1px solid rgba(255, 255, 255, 0.3); transition: background-color 0.2s ease;`; miniBtn.onmouseover = function() { this.style.backgroundColor='rgba(255, 255, 255, 1)'; }; miniBtn.onmouseout = function() { this.style.backgroundColor='rgba(255, 255, 255, 0.8)'; }; miniBtn.title = 'Mở lại Auto Sora'; miniBtn.onclick = handleMiniButtonClick; document.body.appendChild(miniBtn); }
 
-        // Cooldown Timer Button
-        const cooldownBtn = document.createElement('button');
-        cooldownBtn.id = 'sora-cooldown';
-        cooldownBtn.style.cssText = `
-            position: fixed; bottom: 20px; left: /* Adjust position if needed */ 190px;
-            background: rgba(25, 25, 25, 0.9); border: 1px solid rgba(255,255,255,0.1);
-            border-radius: 10px; padding: 8px 16px; font-size: 14px; z-index: 999999;
-            color: #eee; display: none; backdrop-filter: blur(8px); cursor: default;
-        `;
-        cooldownBtn.textContent = `⏳ Cooldown: ${cooldownTime}s`;
-        document.body.appendChild(cooldownBtn);
+    function handleStart() { const input = document.getElementById('sora-input').value; const prompts = input.split('\n').map(x => x.trim()).filter(Boolean); const cooldownInput = parseInt(document.getElementById('sora-cooldown-time').value); cooldownTime = isNaN(cooldownInput) ? 130 : Math.max(1, cooldownInput); if (prompts.length === 0) return alert("❗ Nhập ít nhất 1 prompt."); if (isRunning) { log("Process already running."); return; } log(`Starting process with ${prompts.length} prompts and ${cooldownTime}s cooldown.`); promptQueue = prompts; totalPromptCount = prompts.length; isRunning = true; const mainUI = document.getElementById('sora-auto-ui'); if (mainUI) { mainUI.style.opacity = '0'; mainUI.style.transform = 'scale(0.95)'; setTimeout(() => { mainUI.style.display = 'none'; }, 300); } document.getElementById('sora-minibtn').style.display = 'none'; const auxContainer = document.getElementById('sora-aux-controls-container'); const progressEl = document.getElementById('sora-progress'); const cooldownEl = document.getElementById('sora-cooldown'); const stopBtn = document.getElementById('sora-stop-button'); if(auxContainer) auxContainer.style.display = 'flex'; if(progressEl) progressEl.style.display = 'inline-block'; if(cooldownEl) cooldownEl.style.display = 'inline-block'; if(stopBtn) stopBtn.style.display = 'inline-block'; updateProgress(); startLoop(); }
+    function handleClear() { document.getElementById('sora-input').value = ''; log("Prompt input cleared."); }
+    function handleClose() { const wrapper = document.getElementById('sora-auto-ui'); if (!wrapper) return; wrapper.style.opacity = '0'; wrapper.style.transform = 'scale(0.95)'; setTimeout(() => { wrapper.style.display = 'none'; if (!isRunning) { const miniBtn = document.getElementById('sora-minibtn'); if (miniBtn) miniBtn.style.display = 'block'; } }, 300); }
+    function handleMiniButtonClick() { if (!isRunning) { const wrapper = document.getElementById('sora-auto-ui'); const miniBtn = document.getElementById('sora-minibtn'); if (wrapper) { wrapper.style.display = 'block'; void wrapper.offsetWidth; wrapper.style.opacity = '1'; wrapper.style.transform = 'scale(1)'; } if (miniBtn) miniBtn.style.display = 'none'; const auxContainer = document.getElementById('sora-aux-controls-container'); if (auxContainer) auxContainer.style.display = 'none'; } else { log("Cannot open UI while process is running."); } }
 
-        // Mini Button (to reopen UI)
-        const miniBtn = document.createElement('div');
-        miniBtn.id = 'sora-minibtn';
-        miniBtn.style.cssText = `
-            position: fixed; bottom: 10px; left: 10px; width: 14px; height: 14px;
-            background: white; border-radius: 50%; cursor: pointer; z-index: 999999;
-            box-shadow: 0 0 6px rgba(255,255,255,0.7); display: none; /* Initially hidden */
-        `;
-        miniBtn.title = 'Mở lại Auto Sora';
-        miniBtn.onclick = handleMiniButtonClick;
-        document.body.appendChild(miniBtn);
-    }
+    function handleStop() { log("Stop button clicked."); if (!isRunning) { log("Process is not running."); return; } isRunning = false; const done = totalPromptCount - promptQueue.length; const progressEl = document.getElementById('sora-progress'); if(progressEl) { progressEl.textContent = `Đã dừng: ${done} / ${totalPromptCount}`; log(`Process stopped manually after ${done} prompts.`); } if (countdownInterval) { clearInterval(countdownInterval); countdownInterval = null; const cooldownBtn = document.getElementById('sora-cooldown'); if (cooldownBtn) cooldownBtn.textContent = 'Cooldown: --'; log("Cooldown timer cleared."); } if (promptQueue.length > 0) { saveRemainingPromptsToFile(); } else { log("No remaining prompts to save."); } setTimeout(() => { if (!isRunning) { const auxContainer = document.getElementById('sora-aux-controls-container'); if (auxContainer) auxContainer.style.display = 'none'; const miniBtn = document.getElementById('sora-minibtn'); if (miniBtn) miniBtn.style.display = 'block'; totalPromptCount = 0; } }, 4000); }
+    function saveRemainingPromptsToFile() { if (!promptQueue || promptQueue.length === 0) { log("Attempted to save prompts, but queue is empty."); return; } log(`Saving ${promptQueue.length} remaining prompts to file...`); const content = promptQueue.join('\n'); const blob = new Blob([content], { type: 'text/plain;charset=utf-8' }); const filename = `AutoSora_remaining_${getTimestamp()}.txt`; try { triggerDownload(blob, filename); log("Remaining prompts file download triggered."); } catch (e) { log("Error triggering download for remaining prompts file:"); console.error(e); } }
 
-    // --- Event Handlers for Main UI ---
-    function handleStart() {
-        const input = document.getElementById('sora-input').value;
-        const prompts = input.split('\n').map(x => x.trim()).filter(Boolean);
-        const cooldownInput = parseInt(document.getElementById('sora-cooldown-time').value);
-        cooldownTime = isNaN(cooldownInput) ? 130 : Math.max(1, cooldownInput); // Update global cooldown
+    function updateProgress() { const progressEl = document.getElementById('sora-progress'); const auxContainer = document.getElementById('sora-aux-controls-container'); const cooldownEl = document.getElementById('sora-cooldown'); const stopBtn = document.getElementById('sora-stop-button'); if (!progressEl || !auxContainer) return; const done = totalPromptCount - promptQueue.length; if (isRunning) { progressEl.textContent = `Đã gửi: ${done} / ${totalPromptCount}`; auxContainer.style.display = 'flex'; progressEl.style.display = 'inline-block'; if(cooldownEl) cooldownEl.style.display = 'inline-block'; if(stopBtn) stopBtn.style.display = 'inline-block'; } else { if (totalPromptCount > 0 && done === totalPromptCount) { progressEl.textContent = `Hoàn thành: ${done} / ${totalPromptCount}.`; log(`Finished processing all ${totalPromptCount} prompts.`); } else if (totalPromptCount > 0 && progressEl.textContent.indexOf('Đã dừng') === -1) { progressEl.textContent = `Đã dừng: ${done} / ${totalPromptCount}.`; log(`Process stopped or finished incompletely after ${done} prompts (updateProgress check).`); } else if (totalPromptCount === 0 && progressEl.textContent.indexOf('Đã dừng') === -1) { progressEl.textContent = 'Chưa chạy/Đã dừng.'; } setTimeout(() => { if (!isRunning) { if (auxContainer) auxContainer.style.display = 'none'; const wrapper = document.getElementById('sora-auto-ui'); const miniBtn = document.getElementById('sora-minibtn'); if (wrapper && wrapper.style.display === 'none' && miniBtn) { miniBtn.style.display = 'block'; } if (countdownInterval) { clearInterval(countdownInterval); countdownInterval = null; } if (totalPromptCount > 0 && done === totalPromptCount) { totalPromptCount = 0; } } }, 4000); } }
+    function startCountdown() { let timeRemaining = cooldownTime; const cooldownBtn = document.getElementById('sora-cooldown'); if (!cooldownBtn || !isRunning) return; cooldownBtn.textContent = `⏳ ${timeRemaining}s`; if (countdownInterval) clearInterval(countdownInterval); countdownInterval = setInterval(() => { if (!isRunning) { clearInterval(countdownInterval); countdownInterval = null; const currentBtn = document.getElementById('sora-cooldown'); if(currentBtn) currentBtn.textContent = `⏳ --`; log("Countdown stopped because isRunning is false."); return; } timeRemaining--; const currentBtn = document.getElementById('sora-cooldown'); if (currentBtn) currentBtn.textContent = `⏳ ${timeRemaining}s`; if (timeRemaining <= 0) { clearInterval(countdownInterval); countdownInterval = null; if (currentBtn) currentBtn.textContent = `⏳ 0s`; } }, 1000); }
 
-        if (prompts.length === 0) return alert("❗ Nhập ít nhất 1 prompt.");
-        if (isRunning) { log("Process already running."); return; }
+    function submitPrompt(prompt) { if (!isRunning) { log("submitPrompt cancelled because isRunning is false."); return; } const textarea = document.querySelector('textarea[placeholder*="Describe your"]'); if (!textarea) { log("Error: Prompt textarea not found. Stopping process."); handleStop(); return; } log(`Submitting prompt: ${prompt.substring(0, 50)}...`); textarea.value = prompt; const key = Object.keys(textarea).find(k => k.startsWith("__reactProps$")); if (key && textarea[key]?.onChange) { try { log("Triggering React onChange..."); textarea[key].onChange({ target: textarea }); } catch (e) { log("Error triggering React onChange:"); console.error(e); } } else { log("Warning: React onChange handler not found. Attempting standard events."); textarea.dispatchEvent(new Event('input', { bubbles: true })); textarea.dispatchEvent(new Event('change', { bubbles: true })); } setTimeout(() => { if (!isRunning) { log("Submit button click cancelled because isRunning is false."); return; } const btn = document.querySelector('button[data-disabled="false"]'); if (btn) { log("Submit button found, attempting React onClick..."); const btnKey = Object.keys(btn).find(k => k.startsWith("__reactProps$")); if (btnKey && btn[btnKey]?.onClick) { try { btn[btnKey].onClick({ bubbles: true, cancelable: true, isTrusted: true }); log("React onClick triggered."); } catch (e) { log("Error triggering React onClick:"); console.error(e); log("Attempting standard .click() as fallback..."); btn.click(); } } else { log("Warning: React onClick handler not found on button. Attempting standard .click()."); btn.click(); } } else { log("Error: Submit button (data-disabled='false') not found after delay."); } }, 600); }
 
-        log(`Starting process with ${prompts.length} prompts and ${cooldownTime}s cooldown.`);
-        promptQueue = prompts;
-        totalPromptCount = prompts.length;
-        isRunning = true;
-        document.getElementById('sora-auto-ui').style.display = 'none'; // Hide main UI
-        document.getElementById('sora-minibtn').style.display = 'none'; // Hide mini button
-        document.getElementById('sora-progress').style.display = 'block'; // Show progress
-        document.getElementById('sora-cooldown').style.display = 'block'; // Show cooldown
-        updateProgress();
-        startLoop(); // Start the prompt submission loop
-    }
-
-    function handleClear() {
-        document.getElementById('sora-input').value = '';
-        log("Prompt input cleared.");
-    }
-
-    function handleClose() {
-        const wrapper = document.getElementById('sora-auto-ui');
-        wrapper.style.opacity = '0';
-        wrapper.style.transform = 'scale(0.9)';
-        setTimeout(() => {
-            wrapper.style.display = 'none';
-            // Show mini button only if not running
-            if (!isRunning) {
-                const miniBtn = document.getElementById('sora-minibtn');
-                if (miniBtn) miniBtn.style.display = 'block';
-            }
-        }, 300);
-    }
-
-    function handleMiniButtonClick() {
-        if (!isRunning) { // Only allow reopening if not running
-            const wrapper = document.getElementById('sora-auto-ui');
-            const miniBtn = document.getElementById('sora-minibtn');
-            if (wrapper) {
-                wrapper.style.display = 'block';
-                setTimeout(() => {
-                    wrapper.style.opacity = '1';
-                    wrapper.style.transform = 'scale(1)';
-                }, 10);
-            }
-            if (miniBtn) miniBtn.style.display = 'none';
-        } else {
-            log("Cannot open UI while process is running.");
-        }
-    }
-
-    // --- Progress and Cooldown UI Update Functions ---
-    function updateProgress() {
-        const done = totalPromptCount - promptQueue.length;
-        const progressEl = document.getElementById('sora-progress');
-        const cooldownEl = document.getElementById('sora-cooldown');
-        if (!progressEl || !cooldownEl) return;
-
-        if (isRunning) {
-            progressEl.textContent = `Đã gửi: ${done} / ${totalPromptCount}`;
-            progressEl.style.display = 'block';
-            cooldownEl.style.display = 'block';
-        } else {
-            // Process finished or stopped
-            if (totalPromptCount > 0 && done === totalPromptCount) {
-                progressEl.textContent = `Hoàn thành: ${done} / ${totalPromptCount}.`;
-                log(`Finished processing all ${totalPromptCount} prompts.`);
-            } else if (totalPromptCount > 0 && done < totalPromptCount && !isRunning) {
-                progressEl.textContent = `Đã dừng: ${done} / ${totalPromptCount}.`;
-                log(`Process stopped prematurely after ${done} prompts.`);
-            } else {
-                progressEl.textContent = 'Chưa chạy hoặc đã dừng.';
-            }
-
-            // Hide progress/cooldown after a delay and show mini button
-            setTimeout(() => {
-                if (!isRunning) {
-                    progressEl.style.display = 'none';
-                    cooldownEl.style.display = 'none';
-                    const wrapper = document.getElementById('sora-auto-ui');
-                    const miniBtn = document.getElementById('sora-minibtn');
-                    if (wrapper && wrapper.style.display === 'none' && miniBtn) {
-                        miniBtn.style.display = 'block';
-                    }
-                    totalPromptCount = 0; // Reset count
-                    promptQueue = []; // Clear queue
-                    if (countdownInterval) clearInterval(countdownInterval);
-                    countdownInterval = null;
-                }
-            }, 4000); // Show final status for 4 seconds
-        }
-    }
-
-    function startCountdown() {
-        let timeRemaining = cooldownTime;
-        const cooldownBtn = document.getElementById('sora-cooldown');
-        if (!cooldownBtn) return;
-
-        cooldownBtn.textContent = `Cooldown: ${timeRemaining}s`;
-        if (countdownInterval) clearInterval(countdownInterval); // Clear previous
-
-        countdownInterval = setInterval(() => {
-            timeRemaining--;
-            const currentBtn = document.getElementById('sora-cooldown'); // Re-fetch
-            if (currentBtn) {
-                currentBtn.textContent = `Cooldown: ${timeRemaining}s`;
-            }
-
-            if (timeRemaining <= 0 || !isRunning) { // Stop if time runs out or process stops
-                clearInterval(countdownInterval);
-                countdownInterval = null;
-                if (currentBtn) {
-                    currentBtn.textContent = isRunning ? `Cooldown: 0s` : `Cooldown: --`;
-                }
-            }
-        }, 1000);
-    }
-
-    // --- Prompt Submission Logic ---
-    function submitPrompt(prompt) {
-        const textarea = document.querySelector('textarea[placeholder*="Describe your"]');
-        if (!textarea) {
-            log("Error: Prompt textarea not found. Stopping process.");
-            isRunning = false;
-            updateProgress();
-            return;
-        }
-        log(`Submitting prompt: ${prompt.substring(0, 50)}...`);
-        textarea.value = prompt;
-
-        // Trigger React's onChange handler
-        const key = Object.keys(textarea).find(k => k.startsWith("__reactProps$"));
-        if (key && textarea[key]?.onChange) {
-            try {
-                log("Triggering React onChange...");
-                textarea[key].onChange({ target: textarea });
-            } catch (e) {
-                log("Error triggering React onChange:"); console.error(e);
-            }
-        } else {
-            log("Warning: React onChange handler not found. Attempting standard events.");
-            textarea.dispatchEvent(new Event('input', { bubbles: true }));
-            textarea.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-
-        // Delay before clicking the submit button
-        setTimeout(() => {
-            const btn = document.querySelector('button[data-disabled="false"]'); // Find enabled submit button
-            if (btn) {
-                log("Submit button found, attempting React onClick...");
-                const btnKey = Object.keys(btn).find(k => k.startsWith("__reactProps$"));
-                if (btnKey && btn[btnKey]?.onClick) {
-                    try {
-                        btn[btnKey].onClick({ bubbles: true, cancelable: true, isTrusted: true });
-                        log("React onClick triggered.");
-                    } catch (e) {
-                        log("Error triggering React onClick:"); console.error(e);
-                        log("Attempting standard .click() as fallback...");
-                        btn.click(); // Fallback
-                    }
-                } else {
-                    log("Warning: React onClick handler not found on button. Attempting standard .click().");
-                    btn.click(); // Fallback
-                }
-            } else {
-                log("Error: Submit button (data-disabled='false') not found after delay.");
-            }
-        }, 600); // Delay for stability
-    }
-
-    // --- Prompt Processing Loop Logic ---
-    function processNextPrompt() {
-        if (!isRunning || promptQueue.length === 0) {
-            log("Queue empty or process stopped. Ending loop.");
-            isRunning = false;
-            updateProgress();
-            return;
-        }
-
-        // Read current cooldown time from input each time
-        const currentCooldownInput = parseInt(document.getElementById('sora-cooldown-time')?.value);
-        const currentCooldown = isNaN(currentCooldownInput) ? cooldownTime : Math.max(1, currentCooldownInput);
-        log(`Waiting ${currentCooldown} seconds for next prompt...`);
-
-        // Set timeout for the *next* prompt submission
-        setTimeout(() => {
-            if (!isRunning) { // Double-check running state after timeout
-                log("Process stopped during cooldown.");
-                updateProgress();
-                return;
-            }
-            if (promptQueue.length > 0) {
-                const nextPrompt = promptQueue.shift(); // Get next prompt
-                log(`Processing next prompt (${totalPromptCount - promptQueue.length}/${totalPromptCount})`);
-                submitPrompt(nextPrompt); // Submit it
-                updateProgress(); // Update progress display
-                startCountdown(); // Start visual cooldown timer
-                processNextPrompt(); // Recursively schedule the *following* prompt
-            } else {
-                log("Queue became empty during cooldown.");
-                isRunning = false;
-                updateProgress();
-            }
-        }, currentCooldown * 1000); // Cooldown happens BEFORE the next submission
-    }
-
-    function startLoop() {
-        if (!isRunning || promptQueue.length === 0) {
-            isRunning = false;
-            updateProgress();
-            log("Loop not started or queue empty.");
-            return;
-        }
-        // Submit the *first* prompt immediately
-        const firstPrompt = promptQueue.shift();
-        log(`Starting loop, submitting first prompt (1/${totalPromptCount}): ${firstPrompt.substring(0, 50)}...`);
-        submitPrompt(firstPrompt);
-        updateProgress();
-        startCountdown();
-        // Schedule the *next* prompt processing (after the first cooldown)
-        processNextPrompt();
-    }
+    function processNextPrompt() { if (!isRunning || promptQueue.length === 0) { if (isRunning && promptQueue.length === 0) { log("Queue empty. Ending loop naturally."); isRunning = false; } else if (!isRunning) { log("processNextPrompt: Loop stopping because isRunning is false."); } updateProgress(); return; } const currentCooldownInput = parseInt(document.getElementById('sora-cooldown-time')?.value ?? cooldownTime.toString()); const currentCooldown = isNaN(currentCooldownInput) ? cooldownTime : Math.max(1, currentCooldownInput); log(`Waiting ${currentCooldown} seconds for next prompt...`); startCountdown(); setTimeout(() => { if (!isRunning) { log("Process stopped during cooldown wait."); return; } if (promptQueue.length > 0) { const nextPrompt = promptQueue.shift(); log(`Processing next prompt (${totalPromptCount - promptQueue.length}/${totalPromptCount})`); submitPrompt(nextPrompt); updateProgress(); if (promptQueue.length > 0) { processNextPrompt(); } else { log("Last prompt submitted, queue is now empty."); isRunning = false; updateProgress(); } } else { log("Queue became empty unexpectedly during cooldown."); isRunning = false; updateProgress(); } }, currentCooldown * 1000); }
+    function startLoop() { if (!isRunning || promptQueue.length === 0) { log("Loop not started or queue empty."); isRunning = false; updateProgress(); return; } const firstPrompt = promptQueue.shift(); log(`Starting loop, submitting first prompt (1/${totalPromptCount}): ${firstPrompt.substring(0, 50)}...`); submitPrompt(firstPrompt); updateProgress(); if (promptQueue.length > 0) { processNextPrompt(); } else { log("Only one prompt was in the queue. Loop finished."); isRunning = false; updateProgress(); } }
 
     // --- Download Logic ---
-    function updateSelectedCount() {
-        const count = selectedImageUrls.size;
-        try {
-            const btnText = document.getElementById("sora-download-text");
-            const btn = document.getElementById("sora-download-images");
-            const progressEl = document.getElementById("sora-download-progress");
-
-            if (btnText && btn && !isDownloading) { // Only update if not currently downloading
-                btnText.textContent = `Tải hình (${count})`;
-                btn.disabled = (count === 0);
-                const icon = document.getElementById("sora-download-icon");
-                if (icon) icon.style.display = 'inline'; // Ensure icon is visible
-                if (progressEl) progressEl.style.display = 'none'; // Hide separate progress div
-                const errorEl = document.getElementById("sora-download-error");
-                if (errorEl) errorEl.textContent = ''; // Clear errors
-            } else if (btn) {
-                btn.disabled = true; // Keep disabled if downloading
-                if (progressEl) progressEl.style.display = 'none';
-            }
-        } catch (e) {
-            log("Error updating selected count UI:"); console.error(e);
-        }
-        // Ensure button is disabled if count is 0, even if downloading flag was somehow wrong
-        const btn = document.getElementById("sora-download-images");
-        if (btn && !isDownloading) {
-            btn.disabled = (count === 0);
-        }
-    }
-
-    // --- Utility function to generate timestamp string ---
-    function getTimestamp() {
-        const now = new Date();
-        const pad = n => String(n).padStart(2, '0');
-        return `${pad(now.getDate())}${pad(now.getMonth() + 1)}${String(now.getFullYear()).slice(2)}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-    }
-
-    // --- Utility function to trigger blob download ---
-    function triggerDownload(blob, filename) {
-        const link = document.createElement("a");
-        link.href = URL.createObjectURL(blob);
-        link.download = filename;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(link.href); // Clean up
-        log(`Triggered download for ${filename}`);
-    }
-
-
-    async function handleDownload() {
-        const btn = document.getElementById("sora-download-images");
-        const btnText = document.getElementById("sora-download-text");
-        const btnIcon = document.getElementById("sora-download-icon");
-        const progressEl = document.getElementById("sora-download-progress");
-        const errorEl = document.getElementById("sora-download-error");
-
-        if (!btn || !btnText || !btnIcon || !progressEl || !errorEl) {
-            log("Error: Download UI elements not found."); return;
-        }
-
-        if (isDownloading) {
-            log("Download stop requested.");
-            isDownloading = false; // Set flag to stop processing further results
-            btnText.textContent = `Đang dừng...`;
-            // Button remains disabled until process fully stops
-            return;
-        }
-
-        const urlsToDownload = Array.from(selectedImageUrls);
-        if (urlsToDownload.length === 0) {
-            errorEl.textContent = "Chưa có ảnh nào được chọn.";
-            setTimeout(() => { if (!isDownloading) errorEl.textContent = ''; }, 3000);
-            return;
-        }
-
-        isDownloading = true; // Set flag
-        downloadErrors = 0;
-        let completedCount = 0;
-        let successfulCount = 0;
-        const totalFiles = urlsToDownload.length;
-        const selectedCropOption = document.querySelector('input[name="sora-crop-option"]:checked')?.value ?? 'none';
-
-        // --- Update Button State for Download Start ---
-        btn.disabled = true;
-        btnIcon.style.display = 'none'; // Hide icon
-        btnText.textContent = `Chuẩn bị... (0/${totalFiles})`;
-        progressEl.style.display = 'none'; // Ensure separate progress hidden
-        errorEl.textContent = '';
-
-        log(`Starting download of ${totalFiles} images... Crop: ${selectedCropOption}`);
-
-        // --- Single File Download Logic ---
-        if (totalFiles === 1) {
-            log("Processing single image download...");
-            const url = urlsToDownload[0];
-            btnText.textContent = `Đang xử lý 1 ảnh...`;
-            try {
-                const blob = await convertWebpToPngBlob(url, selectedCropOption);
-                if (blob && isDownloading) { // Check flag again in case stopped during conversion
-                    const timestamp = getTimestamp();
-                    const filename = `AutoSora_${selectedCropOption}_${timestamp}.png`;
-                    triggerDownload(blob, filename);
-                    btnText.textContent = `Đã tải xong 1 ảnh`;
-                    successfulCount = 1;
-                } else if (!blob) {
-                    downloadErrors = 1;
-                    errorEl.textContent = `Lỗi xử lý ảnh. Kiểm tra Console.`;
-                    btnText.textContent = `Lỗi tải ảnh`;
-                } else { // Stopped during conversion
-                     errorEl.textContent = `Đã dừng tải.`;
-                     btnText.textContent = `Đã dừng tải`;
-                }
-            } catch (err) {
-                downloadErrors = 1;
-                log(`Error processing single image (${url.substring(0, 30)}...): ${err.message}`);
-                console.error(err);
-                errorEl.textContent = `Lỗi xử lý ảnh. Kiểm tra Console.`;
-                btnText.textContent = `Lỗi tải ảnh`;
-            } finally {
-                // Final state reset for single file
-                isDownloading = false;
-                btnIcon.style.display = 'inline';
-                btn.disabled = (selectedImageUrls.size === 0);
-                setTimeout(() => {
-                    if (!isDownloading) updateSelectedCount(); // Reset text if not downloading again
-                }, 5000);
-                log("Single image download process finished.");
-            }
-            return; // Exit handleDownload for single file case
-        }
-
-        // --- Multiple Files Download Logic (Concurrent) ---
-        log("Processing multiple images concurrently...");
-        btnText.textContent = `Đang xử lý ${totalFiles} ảnh...`;
-
-        // Create an array of promises, each converting one image
-        const conversionPromises = urlsToDownload.map((url, index) =>
-            convertWebpToPngBlob(url, selectedCropOption)
-                .then(blob => ({ status: 'fulfilled', value: blob, index: index })) // Wrap result
-                .catch(error => ({ status: 'rejected', reason: error, index: index })) // Wrap error
-        );
-
-        // Wait for all conversions to settle (complete or fail)
-        // Using a simple Promise.allSettled polyfill pattern for wider compatibility if needed,
-        // but native Promise.allSettled is preferred.
-        const results = await Promise.allSettled(conversionPromises);
-
-        if (!isDownloading) { // Check if stopped while conversions were running
-            log("Download stopped during image processing.");
-            errorEl.textContent = "Đã dừng tải.";
-            btnText.textContent = "Đã dừng tải";
-            // Final state reset
-            isDownloading = false;
-            btnIcon.style.display = 'inline';
-            btn.disabled = (selectedImageUrls.size === 0);
-             setTimeout(() => {
-                if (!isDownloading) updateSelectedCount();
-            }, 5000);
-            return;
-        }
-
-        // Process results and prepare ZIP
-        log("All image processing settled. Preparing ZIP...");
-        const zip = new JSZip();
-        completedCount = 0; // Reset completed count for this stage
-
-        results.forEach(result => {
-            completedCount++; // Increment count as we process each result
-            btnText.textContent = `Đang chuẩn bị ZIP: ${completedCount}/${totalFiles}...`; // Update progress
-
-            if (result.status === 'fulfilled' && result.value.status === 'fulfilled' && result.value.value) {
-                // Original promise fulfilled, and the inner conversion promise fulfilled with a blob
-                const blob = result.value.value;
-                const originalIndex = result.value.index;
-                const filename = `image_${originalIndex + 1}.png`;
-                zip.file(filename, blob);
-                successfulCount++;
-                log(`Added ${filename} to zip.`);
-            } else {
-                // Either the outer promise failed (unexpected) or the inner conversion failed/returned null
-                downloadErrors++;
-                const originalIndex = result.status === 'fulfilled' ? result.value.index : (result.reason?.index ?? -1); // Try to get index
-                const reason = result.status === 'rejected' ? result.reason : (result.value?.reason ?? 'Unknown conversion error');
-                log(`Error processing image index ${originalIndex}: ${reason}`);
-                if (reason instanceof Error) console.error(reason); // Log full error object if available
-            }
-        });
-
-        // Generate and trigger ZIP download if not stopped and there are successful files
-        if (isDownloading && successfulCount > 0) {
-            try {
-                log("Generating ZIP file...");
-                btnText.textContent = 'Đang tạo file ZIP...';
-                const zipBlob = await zip.generateAsync({
-                    type: "blob",
-                    compression: "DEFLATE",
-                    compressionOptions: { level: 6 } // Level 6 is a good balance
-                }, (metadata) => {
-                    // Check stop flag during zip generation
-                    if (!isDownloading) throw new Error("Zip generation cancelled.");
-                    btnText.textContent = `Đang nén: ${metadata.percent.toFixed(0)}%`;
-                });
-
-                // Generate dynamic filename
-                const zipFilename = `AutoSora_Bulk_${getTimestamp()}.zip`;
-                triggerDownload(zipBlob, zipFilename);
-
-                // Update button on success
-                btnText.textContent = `Đã tải xong ${successfulCount}/${totalFiles} ảnh`;
-                if (downloadErrors > 0) {
-                    errorEl.textContent = `Có ${downloadErrors} lỗi xảy ra khi xử lý ảnh.`;
-                }
-
-            } catch (error) {
-                log("Error during ZIP generation or download:"); console.error(error);
-                if (error.message === "Zip generation cancelled.") {
-                    errorEl.textContent = "Đã dừng tạo file ZIP.";
-                    btnText.textContent = "Đã dừng tạo ZIP";
-                } else {
-                    errorEl.textContent = "Lỗi khi tạo file ZIP. Kiểm tra Console.";
-                    btnText.textContent = "Lỗi tạo ZIP";
-                }
-            }
-        } else if (isDownloading && successfulCount === 0) {
-            // Processed but all failed
-            btnText.textContent = "Lỗi xử lý ảnh";
-            errorEl.textContent = `Không thể xử lý ảnh nào (${downloadErrors} lỗi).`;
-        } else if (!isDownloading && !errorEl.textContent) {
-            // Stopped before ZIP generation started
-             errorEl.textContent = "Đã dừng tải.";
-             btnText.textContent = "Đã dừng tải";
-        }
-
-        // Final state reset for multiple files
-        isDownloading = false; // Reset flag
-        btnIcon.style.display = 'inline'; // Show icon again
-        btn.disabled = (selectedImageUrls.size === 0); // Re-enable based on current selection
-        // Reset button text after a delay to show status
-        setTimeout(() => {
-            if (!isDownloading) updateSelectedCount(); // Reset text if not downloading again
-        }, 5000);
-        log("Multiple image download process finished or stopped.");
-    }
-
-
-    // --- Image Conversion and Cropping Function ---
-    // (No changes needed in this function itself for multithreading)
-    async function convertWebpToPngBlob(url, cropOption = 'none') {
-        try {
-            const response = await fetch(url);
-            if (!response.ok) throw new Error(`Failed to fetch image: ${response.status} ${response.statusText}`);
-            const webpBlob = await response.blob();
-            if (webpBlob.size === 0) throw new Error("Fetched blob is empty.");
-
-            const imgBitmap = await createImageBitmap(webpBlob);
-
-            let sourceX = 0, sourceY = 0;
-            let sourceWidth = imgBitmap.width;
-            let sourceHeight = imgBitmap.height;
-            let targetWidth = imgBitmap.width;
-            let targetHeight = imgBitmap.height;
-
-            const targetCanvas = document.createElement("canvas");
-
-            // Apply crop based on the selected option
-            if (cropOption !== 'none' && sourceWidth > 0 && sourceHeight > 0) {
-                let targetRatio = 1; // Default for square or if calculation fails
-                let canvasTargetWidth = sourceWidth; // Default target canvas size
-                let canvasTargetHeight = sourceHeight;
-
-                log(`Applying crop: ${cropOption} to ${sourceWidth}x${sourceHeight}`);
-
-                switch (cropOption) {
-                    case '16:9':
-                        targetRatio = 16 / 9;
-                        canvasTargetWidth = 1920; // Define target resolution
-                        canvasTargetHeight = 1080;
-                        break;
-                    case '9:16':
-                        targetRatio = 9 / 16;
-                        canvasTargetWidth = 1080; // Define target resolution
-                        canvasTargetHeight = 1920;
-                        break;
-                    case '1:1':
-                        targetRatio = 1 / 1;
-                        canvasTargetWidth = 1080; // Define target resolution
-                        canvasTargetHeight = 1080;
-                        break;
-                }
-
-                const currentRatio = sourceWidth / sourceHeight;
-
-                if (Math.abs(currentRatio - targetRatio) < 0.01) {
-                    log(`Image already ~${cropOption}, no crop needed, resizing to target.`);
-                    // No crop needed, but will resize to target resolution below
-                } else if (currentRatio > targetRatio) {
-                    // Image is wider than target, crop width
-                    const idealWidth = sourceHeight * targetRatio;
-                    sourceX = (sourceWidth - idealWidth) / 2;
-                    sourceWidth = idealWidth;
-                    log(`Cropping width: sx=${sourceX.toFixed(0)}, sw=${sourceWidth.toFixed(0)}`);
-                } else { // currentRatio < targetRatio
-                    // Image is taller than target, crop height
-                    const idealHeight = sourceWidth / targetRatio;
-                    sourceY = (sourceHeight - idealHeight) / 2;
-                    sourceHeight = idealHeight;
-                    log(`Cropping height: sy=${sourceY.toFixed(0)}, sh=${sourceHeight.toFixed(0)}`);
-                }
-
-                // Set target canvas size for the cropped image (use defined target resolution)
-                targetWidth = canvasTargetWidth;
-                targetHeight = canvasTargetHeight;
-                log(`Target canvas size set to ${targetWidth}x${targetHeight}`);
-
-            } else {
-                // No crop, use original dimensions for canvas
-                targetWidth = sourceWidth;
-                targetHeight = sourceHeight;
-                if (cropOption === 'none') {
-                     log(`No crop applied. Target size: ${targetWidth}x${targetHeight}`);
-                } else {
-                     log(`Crop skipped due to invalid source dimensions. Target size: ${targetWidth}x${targetHeight}`);
-                }
-            }
-
-            // Validate dimensions before drawing
-            if (targetWidth <= 0 || targetHeight <= 0 || sourceWidth <= 0 || sourceHeight <= 0 || sourceX < 0 || sourceY < 0) {
-                throw new Error(`Invalid dimensions calculated: Target ${targetWidth}x${targetHeight}, Source Rect ${sourceWidth.toFixed(0)}x${sourceHeight.toFixed(0)} at (${sourceX.toFixed(0)},${sourceY.toFixed(0)}) from ${imgBitmap.width}x${imgBitmap.height}`);
-            }
-
-            // Set canvas dimensions and draw
-            targetCanvas.width = targetWidth;
-            targetCanvas.height = targetHeight;
-            const ctx = targetCanvas.getContext("2d", { alpha: false }); // No transparency needed for PNG usually
-            ctx.imageSmoothingQuality = "high"; // Use high quality resampling
-
-            // Fill background white if needed (useful if original WEBP had transparency)
-            // ctx.fillStyle = '#FFFFFF';
-            // ctx.fillRect(0, 0, targetWidth, targetHeight);
-
-            ctx.drawImage(
-                imgBitmap,
-                sourceX, sourceY,           // Source rectangle top-left
-                sourceWidth, sourceHeight,  // Source rectangle size
-                0, 0,                       // Destination rectangle top-left
-                targetWidth, targetHeight   // Destination rectangle size (resizes/draws cropped area)
-            );
-
-            // Convert canvas to PNG Blob
-            return new Promise((resolve, reject) => {
-                targetCanvas.toBlob(blob => {
-                    if (blob) {
-                        log(`Converted ${url.substring(0,30)}... to PNG blob (${(blob.size / 1024).toFixed(1)} KB)`);
-                        resolve(blob);
-                    } else {
-                        reject(new Error("Canvas toBlob returned null."));
-                    }
-                }, "image/png", 0.95); // PNG format, quality (0.95 good default, 1.0 is lossless but larger)
-            });
-
-        } catch (error) {
-            log(`Error converting image ${url.substring(0,30)}...: ${error.message}`);
-            console.error(`Full error for ${url}:`, error);
-            // Reject the promise instead of returning null to work better with Promise.allSettled
-            throw error; // Re-throw the error to be caught by the caller (.catch or Promise.allSettled)
-        }
-    }
-
+    function updateSelectedCount() { const count = selectedImageUrls.size; try { const btnText = document.getElementById("sora-download-text"); const btn = document.getElementById("sora-download-images"); const icon = document.getElementById("sora-download-icon"); const errorEl = document.getElementById("sora-download-error"); if (btnText && btn && !isDownloading) { btnText.textContent = `Tải hình (${count})`; btn.disabled = (count === 0); if (icon) icon.style.display = 'inline'; if (errorEl) errorEl.textContent = ''; } else if (btn) { btn.disabled = true; } } catch (e) { log("Error updating selected count UI:"); console.error(e); } const btn = document.getElementById("sora-download-images"); if (btn && !isDownloading) { btn.disabled = (selectedImageUrls.size === 0); } }
+    async function handleDownload() { const btn = document.getElementById("sora-download-images"); const btnText = document.getElementById("sora-download-text"); const btnIcon = document.getElementById("sora-download-icon"); const errorEl = document.getElementById("sora-download-error"); if (!btn || !btnText || !btnIcon || !errorEl) { log("Error: Download UI elements not found."); return; } if (isDownloading) { log("Download stop requested."); isDownloading = false; btnText.textContent = `Đang dừng...`; return; } const urlsToDownload = Array.from(selectedImageUrls); if (urlsToDownload.length === 0) { errorEl.textContent = "Chưa có ảnh nào được chọn."; setTimeout(() => { if (!isDownloading && errorEl) errorEl.textContent = ''; }, 3000); return; } isDownloading = true; downloadErrors = 0; let successfulCount = 0; const totalFiles = urlsToDownload.length; const selectedCropOption = document.querySelector('input[name="sora-crop-option"]:checked')?.value ?? 'none'; btn.disabled = true; btnIcon.style.display = 'none'; btnText.textContent = `Chuẩn bị... (0/${totalFiles})`; errorEl.textContent = ''; log(`Starting download of ${totalFiles} images... Crop: ${selectedCropOption}`); if (totalFiles === 1) { log("Processing single image download..."); const url = urlsToDownload[0]; btnText.textContent = `Đang xử lý 1 ảnh...`; try { const blob = await convertWebpToPngBlob(url, selectedCropOption); if (blob && isDownloading) { const timestamp = getTimestamp(); const filename = `AutoSora_${selectedCropOption}_${timestamp}.png`; triggerDownload(blob, filename); btnText.textContent = `Đã tải xong 1 ảnh`; successfulCount = 1; } else if (!blob && isDownloading) { downloadErrors = 1; errorEl.textContent = `Lỗi xử lý ảnh. Kiểm tra Console.`; btnText.textContent = `Lỗi tải ảnh`; } else if (!isDownloading) { errorEl.textContent = `Đã dừng tải.`; btnText.textContent = `Đã dừng tải`; } } catch (err) { if (isDownloading) { downloadErrors = 1; log(`Error processing single image (${url.substring(0, 30)}...): ${err.message}`); console.error(err); errorEl.textContent = `Lỗi xử lý ảnh. Kiểm tra Console.`; btnText.textContent = `Lỗi tải ảnh`; } else { errorEl.textContent = `Đã dừng tải.`; btnText.textContent = `Đã dừng tải`; } } finally { const wasDownloading = isDownloading; isDownloading = false; if (btnIcon) btnIcon.style.display = 'inline'; setTimeout(() => { if (!isDownloading) updateSelectedCount(); }, 5000); log(`Single image download process finished (was downloading: ${wasDownloading}).`); } return; } log("Processing multiple images concurrently..."); let processedImageCount = 0; btnText.textContent = `Đang xử lý ảnh: 0/${totalFiles} (0%)`; const conversionPromises = urlsToDownload.map((url, index) => { return convertWebpToPngBlob(url, selectedCropOption) .then(blob => { if (isDownloading) { processedImageCount++; const percentage = ((processedImageCount / totalFiles) * 100).toFixed(0); btnText.textContent = `Đang xử lý ảnh: ${processedImageCount}/${totalFiles} (${percentage}%)`; log(`Processed image ${processedImageCount}/${totalFiles} (Success)`); } return blob; }) .catch(error => { if (isDownloading) { processedImageCount++; const percentage = ((processedImageCount / totalFiles) * 100).toFixed(0); btnText.textContent = `Đang xử lý ảnh: ${processedImageCount}/${totalFiles} (${percentage}%)`; log(`Processed image ${processedImageCount}/${totalFiles} (Failed: ${error.message})`); } throw error; }); }); const results = await Promise.allSettled(conversionPromises); if (!isDownloading) { log("Download stopped during image processing phase."); errorEl.textContent = "Đã dừng tải."; btnText.textContent = "Đã dừng tải"; if(btnIcon) btnIcon.style.display = 'inline'; setTimeout(() => { if (!isDownloading) updateSelectedCount(); }, 5000); return; } log("All image processing settled. Preparing ZIP..."); btnText.textContent = `Đã xử lý ${totalFiles}/${totalFiles} (100%). Chuẩn bị ZIP...`; const zip = new JSZip(); let zipFileCount = 0; results.forEach((result, index) => { if (!isDownloading) return; if (result.status === 'fulfilled' && result.value) { const blob = result.value; const filename = `image_${index + 1}.png`; zip.file(filename, blob); successfulCount++; zipFileCount++; log(`Added ${filename} to zip.`); } else { downloadErrors++; const reason = result.status === 'rejected' ? result.reason : 'Unknown processing error'; log(`Error processing image index ${index} for ZIP: ${reason instanceof Error ? reason.message : reason}`); } }); if (!isDownloading) { log("Download stopped during ZIP preparation."); errorEl.textContent = "Đã dừng tạo ZIP."; btnText.textContent = "Đã dừng tạo ZIP"; if(btnIcon) btnIcon.style.display = 'inline'; setTimeout(() => { if (!isDownloading) updateSelectedCount(); }, 5000); return; } if (successfulCount > 0) { try { log("Generating ZIP file..."); btnText.textContent = 'Đang tạo file ZIP...'; const zipBlob = await zip.generateAsync({ type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 } }, (metadata) => { if (!isDownloading) throw new Error("Zip generation cancelled."); btnText.textContent = `Đang nén ZIP: ${metadata.percent.toFixed(0)}%`; }); if (!isDownloading) { log("Download stopped during ZIP generation."); errorEl.textContent = "Đã dừng tạo ZIP."; btnText.textContent = "Đã dừng tạo ZIP"; } else { const zipFilename = `AutoSora_Bulk_${getTimestamp()}.zip`; triggerDownload(zipBlob, zipFilename); btnText.textContent = `Đã tải xong ${successfulCount}/${totalFiles} ảnh`; if (downloadErrors > 0) { errorEl.textContent = `Có ${downloadErrors} lỗi xảy ra khi xử lý ảnh.`; } log(`ZIP download triggered for ${successfulCount} files.`); } } catch (error) { log("Error during ZIP generation or download:"); console.error(error); if (error.message === "Zip generation cancelled.") { errorEl.textContent = "Đã dừng tạo file ZIP."; btnText.textContent = "Đã dừng tạo ZIP"; } else if (isDownloading){ errorEl.textContent = "Lỗi khi tạo file ZIP. Kiểm tra Console."; btnText.textContent = "Lỗi tạo ZIP"; } else { errorEl.textContent = "Đã dừng."; btnText.textContent = "Đã dừng"; } } } else if (isDownloading) { btnText.textContent = "Lỗi xử lý ảnh"; errorEl.textContent = `Không thể xử lý ảnh nào (${downloadErrors} lỗi).`; log("No images were successfully processed."); } else { log("Download stopped, no successful images to ZIP."); } const wasDownloadingMulti = isDownloading; isDownloading = false; if (btnIcon) btnIcon.style.display = 'inline'; setTimeout(() => { if (!isDownloading) updateSelectedCount(); }, 5000); log(`Multiple image download process finished (was downloading: ${wasDownloadingMulti}).`); }
+    async function convertWebpToPngBlob(url, cropOption = 'none') { try { if (!isDownloading) throw new Error("Download cancelled before fetching."); const response = await fetch(url); if (!response.ok) throw new Error(`Failed to fetch image: ${response.status} ${response.statusText}`); const webpBlob = await response.blob(); if (webpBlob.size === 0) throw new Error("Fetched blob is empty."); if (!isDownloading) throw new Error("Download cancelled after fetching."); const imgBitmap = await createImageBitmap(webpBlob); let sourceX = 0, sourceY = 0; let sourceWidth = imgBitmap.width; let sourceHeight = imgBitmap.height; let targetWidth = imgBitmap.width; let targetHeight = imgBitmap.height; const targetCanvas = document.createElement("canvas"); if (cropOption !== 'none' && sourceWidth > 0 && sourceHeight > 0) { let targetRatio = 1; let canvasTargetWidth = sourceWidth; let canvasTargetHeight = sourceHeight; log(`Applying crop: ${cropOption} to ${sourceWidth}x${sourceHeight}`); switch (cropOption) { case '16:9': targetRatio = 16 / 9; canvasTargetWidth = 1920; canvasTargetHeight = 1080; break; case '9:16': targetRatio = 9 / 16; canvasTargetWidth = 1080; canvasTargetHeight = 1920; break; case '1:1': targetRatio = 1 / 1; canvasTargetWidth = 1080; canvasTargetHeight = 1080; break; } const currentRatio = sourceWidth / sourceHeight; if (Math.abs(currentRatio - targetRatio) < 0.01) { log(`Image already ~${cropOption}, resizing to target.`); } else if (currentRatio > targetRatio) { const idealWidth = sourceHeight * targetRatio; sourceX = (sourceWidth - idealWidth) / 2; sourceWidth = idealWidth; log(`Cropping width: sx=${sourceX.toFixed(0)}, sw=${sourceWidth.toFixed(0)}`); } else { const idealHeight = sourceWidth / targetRatio; sourceY = (sourceHeight - idealHeight) / 2; sourceHeight = idealHeight; log(`Cropping height: sy=${sourceY.toFixed(0)}, sh=${sourceHeight.toFixed(0)}`); } targetWidth = canvasTargetWidth; targetHeight = canvasTargetHeight; log(`Target canvas size set to ${targetWidth}x${targetHeight}`); } else { targetWidth = sourceWidth; targetHeight = sourceHeight; if (cropOption === 'none') log(`No crop applied. Target size: ${targetWidth}x${targetHeight}`); else log(`Crop skipped due to invalid source dimensions. Target size: ${targetWidth}x${targetHeight}`); } if (targetWidth <= 0 || targetHeight <= 0 || sourceWidth <= 0 || sourceHeight <= 0 || sourceX < 0 || sourceY < 0) { throw new Error(`Invalid dimensions calculated: Target ${targetWidth}x${targetHeight}, Source Rect ${sourceWidth.toFixed(0)}x${sourceHeight.toFixed(0)} at (${sourceX.toFixed(0)},${sourceY.toFixed(0)}) from ${imgBitmap.width}x${imgBitmap.height}`); } targetCanvas.width = targetWidth; targetCanvas.height = targetHeight; const ctx = targetCanvas.getContext("2d", { alpha: false }); ctx.imageSmoothingQuality = "high"; ctx.drawImage(imgBitmap, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, targetWidth, targetHeight); return new Promise((resolve, reject) => { if (!isDownloading) return reject(new Error("Download cancelled before blob creation.")); targetCanvas.toBlob(blob => { if (blob) { if (!isDownloading) return reject(new Error("Download cancelled during blob creation.")); log(`Converted ${url.substring(0,30)}... to PNG blob (${(blob.size / 1024).toFixed(1)} KB)`); resolve(blob); } else { reject(new Error("Canvas toBlob returned null.")); } }, "image/png", 0.95); }); } catch (error) { if (error.message.includes("cancelled")) log(`Conversion cancelled for ${url.substring(0,30)}...: ${error.message}`); else { log(`Error converting image ${url.substring(0,30)}...: ${error.message}`); console.error(`Full error for ${url}:`, error); } throw error; } }
 
     // --- Checkbox Insertion and Image Observation ---
-    // (No changes needed in this section)
-    function insertCheckbox(img) {
-        try {
-            const a = img.closest('a'); // Find the parent link
-            if (!a || a.parentElement?.classList?.contains("sora-image-wrapper")) {
-                return; // Already processed or unexpected structure
-            }
+    function insertCheckbox(img) { try { const a = img.closest('a'); if (!a || a.parentElement?.classList?.contains("sora-image-wrapper")) return; const wrapper = document.createElement("div"); wrapper.className = "sora-image-wrapper"; wrapper.style.position = "relative"; wrapper.style.display = "inline-block"; wrapper.style.margin = "5px"; wrapper.style.verticalAlign = "top"; wrapper.style.lineHeight = "0"; const checkbox = document.createElement("input"); checkbox.type = "checkbox"; checkbox.className = "sora-image-checkbox"; Object.assign(checkbox.style, { position: "absolute", top: "8px", left: "8px", zIndex: "10", width: "18px", height: "18px", cursor: "pointer", transform: "scale(1.3)", accentColor: "#4a90e2" }); checkbox.title = "Chọn/bỏ chọn ảnh này"; const setInitialCheckboxState = () => { try { if (!img.complete || img.naturalWidth === 0 || img.naturalHeight === 0) return; const filterHorizState = document.getElementById('sora-select-horizontal')?.checked ?? false; const filterVertState = document.getElementById('sora-select-vertical')?.checked ?? false; const filterSquareState = document.getElementById('sora-select-square')?.checked ?? false; const imgWidth = img.naturalWidth; const imgHeight = img.naturalHeight; let shouldBeChecked = false; const isHoriz = imgWidth > imgHeight; const isVert = imgHeight > imgWidth; const isSquare = imgWidth === imgHeight; if (!filterHorizState && !filterVertState && !filterSquareState) { shouldBeChecked = false; } else { shouldBeChecked = (filterHorizState && isHoriz) || (filterVertState && isVert) || (filterSquareState && isSquare); } if (checkbox.checked !== shouldBeChecked) { checkbox.checked = shouldBeChecked; } if (shouldBeChecked) { if (!selectedImageUrls.has(img.src)) { selectedImageUrls.add(img.src); updateSelectedCount(); } } else { if (selectedImageUrls.has(img.src)) { selectedImageUrls.delete(img.src); updateSelectedCount(); } } } catch (e) { log(`Error in setInitialCheckboxState for image: ${img.src.substring(0,50)}...`); console.error(e); } }; checkbox.addEventListener("change", (e) => { if (e.target.checked) selectedImageUrls.add(img.src); else selectedImageUrls.delete(img.src); updateSelectedCount(); }); const parent = a.parentElement; if (parent) { parent.insertBefore(wrapper, a); wrapper.appendChild(checkbox); wrapper.appendChild(a); } else { log(`Could not find parent for image link: ${a.href}`); return; } if (img.complete && img.naturalWidth > 0) { setInitialCheckboxState(); } else { img.addEventListener('load', setInitialCheckboxState); img.addEventListener('error', () => log(`Failed to load image for checkbox init: ${img.src.substring(0, 50)}...`)); } } catch (e) { log(`Error inserting checkbox for image: ${img?.src?.substring(0,50)}...`); console.error(e); } }
+    const observer = new MutationObserver((mutations) => { let imagesToCheck = []; for (const mutation of mutations) { if (mutation.type === 'childList') { for (const node of mutation.addedNodes) { if (node.nodeType === 1) { if (node.tagName === 'IMG' && node.parentElement?.tagName === 'A' && !node.closest('.sora-image-wrapper')) { imagesToCheck.push(node); } else if (node.querySelectorAll) { node.querySelectorAll('a > img').forEach(img => { if (!img.closest('.sora-image-wrapper')) imagesToCheck.push(img); }); } } } } } if (imagesToCheck.length > 0) { log(`MutationObserver found ${imagesToCheck.length} new image(s).`); imagesToCheck.forEach(img => insertCheckbox(img)); } });
 
-            // Create wrapper div
-            const wrapper = document.createElement("div");
-            wrapper.className = "sora-image-wrapper";
-            wrapper.style.position = "relative";
-            wrapper.style.display = "inline-block";
-            wrapper.style.margin = "5px";
-            wrapper.style.verticalAlign = "top";
-            wrapper.style.lineHeight = "0"; // Prevent extra space below image
 
-            // Create checkbox
-            const checkbox = document.createElement("input");
-            checkbox.type = "checkbox";
-            checkbox.className = "sora-image-checkbox";
-            Object.assign(checkbox.style, {
-                position: "absolute", top: "8px", left: "8px", zIndex: "10",
-                width: "18px", height: "18px", cursor: "pointer",
-                transform: "scale(1.3)", accentColor: "#1f6feb"
-            });
-            checkbox.title = "Chọn/bỏ chọn ảnh này";
-
-            // Function to set initial checkbox state based on filters (run on load)
-            const setInitialCheckboxState = () => {
+    // --- Find Similar Image Mode Functions ---
+    function toggleFindSimilarMode() { isFindSimilarModeActive = !isFindSimilarModeActive; const button = document.getElementById('sora-find-similar-button'); if (button) { if (isFindSimilarModeActive) { button.classList.add('active'); button.title = 'Tắt chế độ tìm ảnh tương tự (Click vào ảnh để tìm)'; log("Find Similar mode ACTIVATED."); } else { button.classList.remove('active'); button.title = 'Kích hoạt chế độ tìm ảnh tương tự'; log("Find Similar mode DEACTIVATED."); } } }
+    // Uses GM_openInTab
+    function handleDocumentClickForSimilar(event) {
+        if (!isFindSimilarModeActive) { return; }
+        const link = event.target.closest('a');
+        if (!link || !link.href) { return; }
+        const soraGenRegex = /^https?:\/\/sora\.com\/g\/(gen_[a-zA-Z0-9]+)/;
+        const match = link.href.match(soraGenRegex);
+        if (match && match[1]) {
+            const genId = match[1];
+            const exploreUrl = `https://sora.com/explore?query=${genId}`;
+            log(`Find Similar Mode: Match found (${genId}). Opening in background: ${exploreUrl}`);
+            event.preventDefault(); event.stopPropagation();
+            // Use GM_openInTab to open in background
+            if (typeof GM_openInTab === 'function') {
                 try {
-                    // Ensure image is fully loaded with valid dimensions
-                    if (!img.complete || img.naturalWidth === 0 || img.naturalHeight === 0) {
-                        log(`Image ${img.src.substring(0,30)}... not ready for initial check.`);
-                        // Add a small delay and retry? Or rely on MutationObserver? For now, just log.
-                        return;
-                    }
-                    const filterHorizState = document.getElementById('sora-select-horizontal')?.checked ?? false;
-                    const filterVertState = document.getElementById('sora-select-vertical')?.checked ?? false;
-                    const filterSquareState = document.getElementById('sora-select-square')?.checked ?? false;
-
-                    const imgWidth = img.naturalWidth;
-                    const imgHeight = img.naturalHeight;
-                    let shouldBeChecked = false;
-
-                    const isHoriz = imgWidth > imgHeight;
-                    const isVert = imgHeight > imgWidth;
-                    const isSquare = imgWidth === imgHeight;
-
-                    // Determine state based on filters
-                    if (!filterHorizState && !filterVertState && !filterSquareState) {
-                        shouldBeChecked = false; // Unchecked if no filters active
-                    } else {
-                        shouldBeChecked = (filterHorizState && isHoriz) || (filterVertState && isVert) || (filterSquareState && isSquare);
-                    }
-
-                    // Only change state if needed and update the main selection set
-                    if (checkbox.checked !== shouldBeChecked) {
-                        checkbox.checked = shouldBeChecked;
-                        log(`Initial state for ${img.src.substring(0,30)}... set to ${shouldBeChecked} based on filters.`);
-                        if (shouldBeChecked) {
-                            if (!selectedImageUrls.has(img.src)) {
-                                selectedImageUrls.add(img.src);
-                                updateSelectedCount(); // Update count only if state changed
-                            }
-                        } else {
-                            if (selectedImageUrls.has(img.src)) {
-                                selectedImageUrls.delete(img.src);
-                                updateSelectedCount(); // Update count only if state changed
-                            }
-                        }
-                    } else {
-                         // Ensure consistency even if checkbox state didn't change visually
-                         if (shouldBeChecked && !selectedImageUrls.has(img.src)) {
-                             selectedImageUrls.add(img.src); updateSelectedCount();
-                         } else if (!shouldBeChecked && selectedImageUrls.has(img.src)) {
-                             selectedImageUrls.delete(img.src); updateSelectedCount();
-                         }
-                    }
-
-
+                    GM_openInTab(exploreUrl, { active: false, setParent: true });
                 } catch (e) {
-                    log(`Error in setInitialCheckboxState for image: ${img.src.substring(0,50)}...`);
-                    console.error(e);
+                     log("Error calling GM_openInTab. Falling back to window.open. Check browser console and Tampermonkey permissions.");
+                     console.error("GM_openInTab error:", e);
+                     window.open(exploreUrl, '_blank'); // Fallback
                 }
-            };
-
-            // Event listener for manual checkbox changes
-            checkbox.addEventListener("change", (e) => {
-                log(`Manual check change for ${img.src.substring(0,30)}...: ${e.target.checked}`);
-                if (e.target.checked) {
-                    selectedImageUrls.add(img.src);
-                } else {
-                    selectedImageUrls.delete(img.src);
-                }
-                updateSelectedCount(); // Update count on manual change
-            });
-
-            // Insert wrapper and move elements
-            const parent = a.parentElement;
-            parent.insertBefore(wrapper, a);
-            wrapper.appendChild(checkbox);
-            wrapper.appendChild(a); // Move the link (and image) inside the wrapper
-
-            // Set initial state: if image already loaded, run now; otherwise, add listener
-            if (img.complete && img.naturalWidth > 0) {
-                log(`Image ${img.src.substring(0,30)}... already complete, running initial check.`);
-                setInitialCheckboxState();
             } else {
-                log(`Image ${img.src.substring(0,30)}... not complete, adding load listener.`);
-                img.addEventListener('load', () => {
-                    log(`Image ${img.src.substring(0,30)}... loaded, running initial check.`);
-                    setInitialCheckboxState();
-                });
-                img.addEventListener('error', () => {
-                    log(`Failed to load image for checkbox init: ${img.src.substring(0, 50)}...`);
-                    // Optionally remove the broken image placeholder/wrapper
-                    // wrapper.remove();
-                });
+                log("Warning: GM_openInTab not available. Falling back to window.open.");
+                window.open(exploreUrl, '_blank');
             }
-
-        } catch (e) {
-            log(`Error inserting checkbox for image: ${img.src?.substring(0,50)}...`);
-            console.error(e);
         }
     }
-
-    // MutationObserver to detect newly added images
-    // (No changes needed in this section)
-    const observer = new MutationObserver((mutations) => {
-        for (const mutation of mutations) {
-            if (mutation.type === 'childList') {
-                for (const node of mutation.addedNodes) {
-                    if (node.nodeType === 1) { // Element node
-                        // Find images within links that were added
-                        const matchingImages = [];
-                        if (node.matches && node.matches('a > img')) { // Check node itself
-                             if (!node.closest('.sora-image-wrapper')) { // Check if not already wrapped
-                                matchingImages.push(node);
-                            }
-                        } else if (node.querySelectorAll) { // Check descendants
-                            node.querySelectorAll('a > img').forEach(img => {
-                                 if (!img.closest('.sora-image-wrapper')) { // Check if not already wrapped
-                                    matchingImages.push(img);
-                                }
-                            });
-                        }
-
-                        // Process found images
-                        if (matchingImages.length > 0) {
-                            log(`Detected ${matchingImages.length} new unwrapped images.`);
-                            matchingImages.forEach(img => {
-                                insertCheckbox(img);
-                            });
-                        }
-                    }
-                }
-            }
-        }
-        // Note: Re-applying filters (updateImageSelection()) here can be resource-intensive.
-        // It's generally better to let the 'load' event handle initial state for new images.
-    });
 
     // --- Initialization ---
-    // (No changes needed in this section)
-    function waitForElement(selector, callback) {
-        log(`Waiting for element: ${selector}`);
-        let checkCount = 0;
-        const maxChecks = 40; // Timeout after 20 seconds
-        const interval = setInterval(() => {
-            checkCount++;
-            const el = document.querySelector(selector);
-            if (el) {
-                clearInterval(interval);
-                log(`Element found: ${selector}. Initializing...`);
-                try {
-                    callback(el);
-                    log("Initialization callback executed.");
-                } catch (e) {
-                    log("ERROR during initialization callback execution:");
-                    console.error(e);
-                    alert("Lỗi khi khởi chạy Auto Sora script. Kiểm tra Console (F12).");
-                }
-            } else if (checkCount >= maxChecks) {
-                clearInterval(interval);
-                log(`Element ${selector} not found after ${maxChecks * 0.5} seconds. Script may not function correctly.`);
-                alert(`Auto Sora: Không tìm thấy phần tử "${selector}" sau ${maxChecks * 0.5} giây. Script có thể không hoạt động đúng.`);
-            }
-        }, 500);
-    }
+    function waitForElement(selector, callback) { log(`Waiting for element: ${selector}`); let checkCount = 0; const maxChecks = 40; const interval = setInterval(() => { checkCount++; const el = document.querySelector(selector); if (el) { clearInterval(interval); log(`Element found: ${selector}. Initializing...`); try { callback(el); log("Initialization callback executed."); } catch (e) { log("ERROR during initialization callback execution:"); console.error(e); alert("Lỗi nghiêm trọng khi khởi chạy Auto Sora script. Không thể tạo UI. Kiểm tra Console (F12) để biết chi tiết."); } } else if (checkCount >= maxChecks) { clearInterval(interval); log(`Element ${selector} not found after ${maxChecks * 0.5} seconds. Script cannot initialize UI.`); alert(`Auto Sora: Không tìm thấy phần tử quan trọng "${selector}" để khởi chạy UI. Script có thể không hoạt động.`); } }, 500); }
 
     // --- Script Entry Point ---
-    // (No changes needed in this section)
-    // Check if JSZip is loaded (critical dependency)
-    if (typeof JSZip === 'undefined') {
-        log("FATAL ERROR: JSZip library not loaded. @require may have failed. Download functionality will not work.");
-        alert("Lỗi nghiêm trọng: Thư viện JSZip chưa được tải. Chức năng tải xuống sẽ không hoạt động. Kiểm tra cài đặt Tampermonkey và kết nối mạng.");
-        return; // Stop script execution
-    } else {
-        log("JSZip library loaded successfully.");
-    }
+    if (typeof JSZip === 'undefined') { log("FATAL ERROR: JSZip library not loaded."); alert("Lỗi nghiêm trọng: Thư viện JSZip chưa được tải."); return; } else { log("JSZip library loaded successfully."); }
+    if (typeof GM_openInTab === 'undefined') { log("Warning: GM_openInTab is not defined. Make sure the script has the necessary @grant permission in Tampermonkey/Greasemonkey. Background tabs might not work reliably."); }
 
-    // Wait for the main prompt textarea to appear before initializing the UI and observer
     waitForElement('textarea[placeholder*="Describe your"]', () => {
-        createUI(); // Create the main UI panel
-        log("UI Created.");
-
-        // Initial scan for existing images on the page
-        log("Performing initial scan for images...");
-        document.querySelectorAll("a > img").forEach(img => {
-             if (!img.closest('.sora-image-wrapper')) { // Ensure not already wrapped
-                 insertCheckbox(img); // Add checkboxes and set initial state based on filters
-             }
-        });
-        log("Initial image scan complete.");
-        updateSelectedCount(); // Ensure count is correct after initial scan
-
-        // Start observing the DOM for newly added images
-        log("Starting MutationObserver...");
-        observer.observe(document.body, { childList: true, subtree: true });
-        log("MutationObserver started.");
+        try {
+            createUI(); log("UI Created.");
+            log("Performing initial scan for images..."); document.querySelectorAll("a > img").forEach(img => { if (!img.closest('.sora-image-wrapper')) insertCheckbox(img); }); log("Initial image scan complete."); updateSelectedCount();
+            log("Starting MutationObserver..."); observer.observe(document.body, { childList: true, subtree: true }); log("MutationObserver started.");
+            document.addEventListener('click', handleDocumentClickForSimilar, true); log("Added global click listener for Find Similar mode.");
+        } catch (e) { log("ERROR during script initialization after element found:"); console.error(e); alert("Đã xảy ra lỗi trong quá trình khởi tạo Auto Sora sau khi tìm thấy phần tử. Kiểm tra Console (F12)."); }
     });
 
 })();
