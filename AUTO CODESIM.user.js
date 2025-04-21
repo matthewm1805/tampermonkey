@@ -5,7 +5,7 @@
 // @description  Lấy OTP codesim.net. Hiển thị SĐT/OTP (có separator), click để copy. Góc dưới phải, Glass UI Sáng, Draggable.
 // @author       Matthew M. & Gemini
 // @match        *://automusic.win/*
-// @match        *://*.automusic.win/*
+// @match        *://www.automusic.win/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
