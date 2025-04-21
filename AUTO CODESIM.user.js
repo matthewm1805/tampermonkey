@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         Auto Codesim
 // @namespace    http://tampermonkey.net/
-// @version      2.8.2
+// @version      2.8.3
 // @description  Lấy OTP codesim.net. Hiển thị SĐT/OTP (có separator), click để copy. Góc dưới phải, Glass UI Sáng, Draggable.
-// @author       Matthew M. & Gemini
+// @author       Matthew M.
 // @match        *://automusic.win/*
 // @match        *://www.automusic.win/*
 // @grant        GM_xmlhttpRequest
