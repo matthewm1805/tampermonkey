@@ -1,827 +1,133 @@
 // ==UserScript==
-// @name         Auto Codesim
+// @name         🧠 Auto Sora
 // @namespace    http://tampermonkey.net/
-// @version      2.8.2
-// @description  Lấy OTP codesim.net. Hiển thị SĐT/OTP (có separator), click để copy. Góc dưới phải, Glass UI Sáng, Draggable.
-// @author       Matthew M. & Gemini
-// @match        *://automusic.win/*
-// @match        *://*.automusic.win/*
-// @grant        GM_xmlhttpRequest
-// @grant        GM_setValue
-// @grant        GM_getValue
-// @grant        GM_addStyle
-// @grant        GM_setClipboard
-// @connect      apisim.codesim.net
-// @license      MIT
+// @version      4.8
+// @description  Auto generate prompt list, bulk download (PNG, multithreaded), single file download, auto crop (16:9, 9:16, 1:1), H/V/Square filter, Stop button, Find Similar Image (background tab), Glass UI
+// @author       Matthew M.
+// @match        *://sora.com/*
+// @match        *://www.sora.com/*
+// @updateURL    https://raw.githubusercontent.com/matthewm1805/tampermonkey/main/%F0%9F%A7%A0%20Auto%20Sora.user.js
+// @downloadURL  https://raw.githubusercontent.com/matthewm1805/tampermonkey/main/%F0%9F%A7%A0%20Auto%20Sora.user.js
+// @grant        none
+// @require      https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js
 // ==/UserScript==
 
-(function() {
+(function () {
     'use strict';
-    // --- Constants ---
-    const API_BASE_URL = "https://apisim.codesim.net";
-    const POLLING_INTERVAL_DEFAULT = 4500; // Milliseconds for general polling (not used currently)
-    const POLLING_INTERVAL_PENDING = 4100; // Milliseconds for polling when OTP is pending
-    const TARGET_SERVICES = ["YouTube", "Gmail"]; // Services to filter for
-    const DEFAULT_SERVICE_NAME = "YouTube"; // Default service to select if available
-    const DEFAULT_NETWORK_NAME = "VIETTEL"; // Default network to select if available
-    const ACCOUNTS = {
-        "bassteam": "eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJiYXNzdGVhbSIsImp0aSI6IjIyNzA2IiwiaWF0IjoxNzAwNzg0NzYxLCJleHAiOjE3NjI5OTI3NjF9.Y-EdhWVLhyo2A-KOfoNNDzUMt4Ht0yzSa9dtMkL1EJTlJ4BtAcjlYqD2BNIYpU95m5B7NFxJtDlHpHHAKpmGzw",
-        "sang88": "eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJzYW5nODgiLCJqdGkiOiIxMzM4MCIsImlhdCI6MTcwMDc4NDc4NiwiZXhwIjoxNzYyOTkyNzg2fQ.ucsVc3AGnV3OOIuZR10fciFD1vU4a32lXLLOXIV9nyxDvTJmqvzGbXNlx7UaHap2Zyw4j8838Fr1B_xytrE7Wg"
-        // Add more accounts here: "AccountName": "API_Key"
-    };
-    const LAST_SELECTED_ACCOUNT_KEY = 'codesim_last_selected_account_v4'; // Keep consistent if structure is same
-    const MINIMIZED_STATE_KEY = 'codesim_minimized_state_v4'; // Keep consistent if structure is same
-    const DEFAULT_POSITION = { top: 'auto', bottom: '20px', left: 'auto', right: '20px' };
-    const ICON_MINIMIZE = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line></svg>`;
-    const ICON_MAXIMIZE = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>`;
-    const ICON_COPY = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle; margin-left: 5px;"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>`;
 
-    // --- State Variables ---
-    let services = []; // Full list from API
-    let filteredServices = []; // Services matching TARGET_SERVICES
-    let networks = []; // Full list from API
-    let currentOtpId = null; // ID for the current OTP request
-    let currentSimId = null; // ID for the current SIM request (for cancellation)
-    let currentPhoneNumber = null; // Currently retrieved phone number
-    let currentOtpCode = null; // Currently retrieved OTP code
-    let pollingTimeoutId = null; // ID for the setTimeout used for polling OTP
-    let accountBalances = {}; // Cache for account balances { accountName: balance | null }
-    let selectedAccountName = null; // Currently selected account name
-    let currentApiKey = null; // API key for the selected account
-    let isMinimized = GM_getValue(MINIMIZED_STATE_KEY, false); // UI minimized state
+    // --- Global Variables ---
+    let promptQueue = [];
+    let totalPromptCount = 0;
+    let isRunning = false;
+    let countdownInterval = null;
+    let cooldownTime = 130;
+    let selectedImageUrls = new Set();
+    let isDownloading = false;
+    let downloadErrors = 0;
+    let isFindSimilarModeActive = false;
 
-    // --- Core Functions ---
+    function log(msg) { console.log(`[Auto Sora v4.8] ${msg}`); }
+    function getTimestamp() { const now = new Date(); const pad = n => String(n).padStart(2, '0'); return `${pad(now.getDate())}${pad(now.getMonth() + 1)}${String(now.getFullYear()).slice(2)}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`; }
+    function triggerDownload(blob, filename) { const link = document.createElement("a"); link.href = URL.createObjectURL(blob); link.download = filename; document.body.appendChild(link); link.click(); document.body.removeChild(link); URL.revokeObjectURL(link.href); log(`Triggered download for ${filename}`); }
 
-    /**
-     * Copies text to the clipboard using GM_setClipboard.
-     * Shows a status message on success or failure.
-     * @param {string | null} text The text to copy.
-     * @param {string} successMessagePrefix Prefix for the success message.
-     */
-    function copyToClipboard(text, successMessagePrefix = "Đã copy:") {
-        if (!text || typeof text !== 'string' || text.trim() === '' || text === 'Đang chờ yêu cầu' || text === 'Đang chờ...' || text === 'Đang lấy số...') {
-            console.log('[CodeSim] Invalid copy text:', text);
-            return;
-        }
-        try {
-            GM_setClipboard(text);
-            showStatus(`${successMessagePrefix} ${text}`, false); // Show success, not error
-            console.log(`[CodeSim] Copied: ${text}`);
-        } catch (err) {
-            console.error('[CodeSim] Copy error:', err);
-            showStatus('Lỗi sao chép!', true);
-        }
-    }
+    function updateImageSelection() { log("Updating image selections based on H/V/Square filters..."); try { const filterHorizState = document.getElementById('sora-select-horizontal')?.checked ?? false; const filterVertState = document.getElementById('sora-select-vertical')?.checked ?? false; const filterSquareState = document.getElementById('sora-select-square')?.checked ?? false; selectedImageUrls.clear(); document.querySelectorAll(".sora-image-wrapper").forEach(wrapper => { const checkbox = wrapper.querySelector(".sora-image-checkbox"); const img = wrapper.querySelector("img"); if (!checkbox || !img) return; const imgWidth = (img.complete && img.naturalWidth > 0) ? img.naturalWidth : img.width; const imgHeight = (img.complete && img.naturalHeight > 0) ? img.naturalHeight : img.height; let checkThisBox = false; if (img.complete && imgWidth > 0 && imgHeight > 0) { const isHoriz = imgWidth > imgHeight; const isVert = imgHeight > imgWidth; const isSquare = imgWidth === imgHeight; if (!filterHorizState && !filterVertState && !filterSquareState) { checkThisBox = false; } else { checkThisBox = (filterHorizState && isHoriz) || (filterVertState && isVert) || (filterSquareState && isSquare); } checkbox.checked = checkThisBox; if (checkThisBox) { selectedImageUrls.add(img.src); } } else if (!img.complete) { checkThisBox = checkbox.checked; if (checkThisBox) { selectedImageUrls.add(img.src); } } else { checkbox.checked = false; if (selectedImageUrls.has(img.src)) { selectedImageUrls.delete(img.src); } log(`Image ${img.src.substring(0,30)}... has invalid dimensions (${imgWidth}x${imgHeight}) after loading.`); } }); updateSelectedCount(); log(`Selection updated. ${selectedImageUrls.size} images selected based on filters.`); } catch (e) { log("Error during image selection update:"); console.error(e); } }
 
-    /**
-     * Makes an API request using GM_xmlhttpRequest.
-     * Handles common API response structure and errors.
-     * @param {string} method HTTP method ('GET', 'POST', etc.)
-     * @param {string} endpoint API endpoint (e.g., '/sim/get_sim')
-     * @param {object} params Query parameters.
-     * @param {function} callback Success callback, receives `data` part of the response.
-     * @param {function} onError Error callback, receives error message string.
-     * @param {string|null} specificApiKey Optional API key to use instead of the current one.
-     */
-    function apiRequest(method, endpoint, params = {}, callback, onError, specificApiKey = null) {
-        const keyToUse = specificApiKey || currentApiKey;
-        if (!keyToUse) {
-            const errorMsg = "Chưa chọn tài khoản!";
-            if (onError) onError(errorMsg);
-            else showStatus(errorMsg, true);
-            console.error("[CodeSim] API Error:", errorMsg);
-            return;
-        }
-        params.api_key = keyToUse;
-        const url = new URL(`${API_BASE_URL}${endpoint}`);
-        if (method.toUpperCase() === 'GET') {
-             Object.keys(params).forEach(key => {
-                 if (params[key] !== undefined && params[key] !== null && params[key] !== '') {
-                     url.searchParams.append(key, params[key]);
-                 }
-             });
-        }
-        const accountLabel = selectedAccountName || 'Init';
-        console.log(`[CodeSim ${accountLabel}] Req: ${method} ${url.toString()}`);
-        GM_xmlhttpRequest({
-            method: method.toUpperCase(),
-            url: url.toString(),
-            timeout: 15000,
-            headers: { "Content-Type": "application/json", "Accept": "application/json" },
-            onload: function(response) {
-                console.log(`[CodeSim ${accountLabel}] Res Status: ${response.status}`);
-                try {
-                    const json = JSON.parse(response.responseText);
-                    if (json.status === 200) {
-                        if (callback) callback(json.data);
-                    } else {
-                        const errMsg = json.message || `Lỗi API (${json.status})`;
-                        console.error(`[CodeSim ${accountLabel}] API Error: ${errMsg}`, json);
-                        if (onError) onError(errMsg);
-                        else showStatus(`Lỗi API: ${errMsg}`, true);
-                    }
-                } catch (e) {
-                    console.error(`[CodeSim ${accountLabel}] JSON Parse Error:`, e, "Response Text:", response.responseText);
-                    const errorMsg = "Lỗi xử lý phản hồi API.";
-                    if (onError) onError(errorMsg);
-                    else showStatus(errorMsg, true);
-                }
-            },
-            onerror: function(response) {
-                console.error(`[CodeSim ${accountLabel}] Network/Request Error:`, response);
-                const errorMsg = "Lỗi mạng hoặc yêu cầu API.";
-                if (onError) onError(errorMsg);
-                else showStatus(errorMsg, true);
-            },
-            ontimeout: function() {
-                console.error(`[CodeSim ${accountLabel}] Request Timeout`);
-                const errorMsg = "Yêu cầu API bị timeout.";
-                if (onError) onError(errorMsg);
-                else showStatus(errorMsg, true);
-            }
-        });
-    }
-
-    /**
-     * Updates the status message display area.
-     * @param {string} message The message to display.
-     * @param {boolean} isError If true, style as an error.
-     * @param {boolean} isLoading If true, style as loading (used for specific states).
-     */
-    function showStatus(message, isError = false, isLoading = false) {
-        const statusEl = document.getElementById('codesim-status');
-        if (statusEl) {
-            if (isLoading && message === 'Đang chờ mã OTP...' && statusEl.classList.contains('loading-otp')) {
-                 return;
-            }
-            statusEl.textContent = message;
-            statusEl.className = 'status-message'; // Reset classes
-            if (isError) {
-                statusEl.classList.add('error');
-            } else if (isLoading) {
-                 if (message === 'Đang chờ mã OTP...') {
-                     statusEl.classList.add('loading-otp');
-                 } else {
-                     statusEl.classList.add('loading'); // General loading
-                 }
-            } else {
-                 statusEl.classList.add('success');
-            }
-            if (!isLoading || message !== 'Đang chờ mã OTP...') {
-                console.log(`[CodeSim Status] ${message}`);
-            }
-        } else {
-            console.warn("[CodeSim] Status element missing.");
-        }
-    }
-
-    /**
-     * Updates the main balance display below the account dropdown.
-     */
-    function updateMainBalanceDisplay() {
-        const balanceEl = document.getElementById('codesim-balance-main');
-        if (!balanceEl) return;
-        if (selectedAccountName && accountBalances[selectedAccountName] !== undefined) {
-            if (accountBalances[selectedAccountName] === null) { // Error fetching balance
-                balanceEl.textContent = `Số dư (${selectedAccountName}): Lỗi`;
-                balanceEl.style.color = 'var(--danger-color)';
-            } else {
-                balanceEl.textContent = `Số dư (${selectedAccountName}): ${accountBalances[selectedAccountName].toLocaleString('vi-VN')}đ`;
-                balanceEl.style.color = 'var(--success-color)';
-            }
-        } else {
-            balanceEl.textContent = 'Số dư: Chọn tài khoản...';
-            balanceEl.style.color = 'var(--text-color-dim)'; // Dim color when no account selected
-        }
-    }
-
-    /**
-     * Toggles the minimized state of the UI.
-     * Resets position to default when minimizing.
-     */
-    function toggleMinimize() {
-        isMinimized = !isMinimized;
-        const container = document.getElementById('codesim-container');
-        const minimizeBtn = document.getElementById('codesim-minimize-btn');
-        if (container && minimizeBtn) {
-            container.classList.toggle('codesim-minimized', isMinimized);
-            minimizeBtn.innerHTML = isMinimized ? ICON_MAXIMIZE : ICON_MINIMIZE;
-            minimizeBtn.title = isMinimized ? 'Phóng to' : 'Thu nhỏ';
-            if (isMinimized) {
-                container.style.top = DEFAULT_POSITION.top;
-                container.style.bottom = DEFAULT_POSITION.bottom;
-                container.style.left = DEFAULT_POSITION.left;
-                container.style.right = DEFAULT_POSITION.right;
-                console.log('[CodeSim] Minimized. Reset position to default.');
-            } else {
-                 console.log('[CodeSim] Maximized.');
-            }
-            GM_setValue(MINIMIZED_STATE_KEY, isMinimized);
-        } else {
-             console.warn("[CodeSim] Container or Minimize button not found during toggle.");
-        }
-    }
-
-    /**
-     * Creates the main UI elements and appends them to the body.
-     */
     function createUI() {
-        console.log("[CodeSim] Creating UI (v2.8.2 - Text Update)...");
-
-        // --- Main Container ---
-        const container = document.createElement('div');
-        container.id = 'codesim-container';
-        if (isMinimized) { container.classList.add('codesim-minimized'); }
-        container.style.top = DEFAULT_POSITION.top;
-        container.style.bottom = DEFAULT_POSITION.bottom;
-        container.style.left = DEFAULT_POSITION.left;
-        container.style.right = DEFAULT_POSITION.right;
-        try {
-            if (!document.body) { console.error("[CodeSim] Body not ready!"); setTimeout(createUI, 100); return; }
-            document.body.appendChild(container);
-            console.log("[CodeSim] Container appended.");
-        } catch (e) { console.error("[CodeSim] Failed to append container!", e); return; }
-
-        // --- Header ---
-        const header = document.createElement('div');
-        header.id = 'codesim-header';
-        header.style.cursor = 'move';
-        const title = document.createElement('h3');
-        title.textContent = 'Auto Codesim';
-        header.appendChild(title);
-        const controlsDiv = document.createElement('div');
-        controlsDiv.className = 'codesim-controls';
-        const minimizeButton = document.createElement('button');
-        minimizeButton.id = 'codesim-minimize-btn';
-        minimizeButton.className = 'control-button minimize svg-button';
-        minimizeButton.innerHTML = isMinimized ? ICON_MAXIMIZE : ICON_MINIMIZE;
-        minimizeButton.title = isMinimized ? 'Phóng to' : 'Thu nhỏ';
-        minimizeButton.onclick = toggleMinimize;
-        controlsDiv.appendChild(minimizeButton);
-        const closeButton = document.createElement('button');
-        closeButton.id = 'codesim-close-btn';
-        closeButton.className = 'control-button close';
-        closeButton.innerHTML = '×';
-        closeButton.title = 'Đóng';
-        closeButton.onclick = (e) => { e.stopPropagation(); container.style.display = 'none'; };
-        controlsDiv.appendChild(closeButton);
-        header.appendChild(controlsDiv);
-        container.appendChild(header);
-
-        // --- Content Area ---
-        const contentWrapper = document.createElement('div');
-        contentWrapper.className = 'codesim-content';
-        container.appendChild(contentWrapper);
-
-        try {
-            // Account Selection
-            const accountGroup = document.createElement('div');
-            accountGroup.className = 'form-group';
-            const accountLabel = document.createElement('label'); accountLabel.textContent = 'Tài khoản:'; accountLabel.htmlFor = 'codesim-account-select';
-            const accountSelect = document.createElement('select'); accountSelect.id = 'codesim-account-select'; accountSelect.innerHTML = '<option value="">-- Đang tải TK --</option>'; accountSelect.onchange = handleAccountChange;
-            accountGroup.appendChild(accountLabel); accountGroup.appendChild(accountSelect); contentWrapper.appendChild(accountGroup);
-
-            // Balance Display (Main)
-            const balanceDisplay = document.createElement('div'); balanceDisplay.id = 'codesim-balance-main'; contentWrapper.appendChild(balanceDisplay);
-
-            // Service Selection
-            const serviceGroup = document.createElement('div'); serviceGroup.className = 'form-group';
-            const serviceLabel = document.createElement('label'); serviceLabel.textContent = 'Dịch vụ:'; serviceLabel.htmlFor = 'codesim-service-select';
-            const serviceSelect = document.createElement('select'); serviceSelect.id = 'codesim-service-select'; serviceSelect.innerHTML = '<option value="">-- Chọn dịch vụ --</option>'; serviceSelect.onchange = checkAndEnableOtpButton;
-            serviceGroup.appendChild(serviceLabel); serviceGroup.appendChild(serviceSelect); contentWrapper.appendChild(serviceGroup);
-
-            // Network Selection
-            const networkGroup = document.createElement('div'); networkGroup.className = 'form-group';
-            const networkLabel = document.createElement('label'); networkLabel.textContent = 'Nhà mạng:'; networkLabel.htmlFor = 'codesim-network-select';
-            const networkSelect = document.createElement('select'); networkSelect.id = 'codesim-network-select'; networkSelect.innerHTML = '<option value="">-- Mặc định --</option>';
-            networkGroup.appendChild(networkLabel); networkGroup.appendChild(networkSelect); contentWrapper.appendChild(networkGroup);
-
-            // Phone Prefix Input (Optional)
-            const prefixGroup = document.createElement('div'); prefixGroup.className = 'form-group';
-            const phonePrefixLabel = document.createElement('label'); phonePrefixLabel.textContent = 'Đầu số (Tùy chọn):'; phonePrefixLabel.htmlFor = 'codesim-phone-prefix';
-            const phonePrefixInput = document.createElement('input'); phonePrefixInput.type = 'text'; phonePrefixInput.id = 'codesim-phone-prefix'; phonePrefixInput.placeholder = 'VD: 098,034,...';
-            prefixGroup.appendChild(phonePrefixLabel); prefixGroup.appendChild(phonePrefixInput); contentWrapper.appendChild(prefixGroup);
-
-            // --- Separator for Info Display ---
-            const infoSeparator = document.createElement('div');
-            infoSeparator.id = 'codesim-info-separator'; // Add ID for styling
-            contentWrapper.appendChild(infoSeparator); // Add separator to main content
-
-            // --- Phone Number Display (inside separator) ---
-            const phoneDisplayGroup = document.createElement('div'); phoneDisplayGroup.className = 'info-display-group';
-            const phoneDisplay = document.createElement('div'); phoneDisplay.id = 'codesim-phone-display'; phoneDisplay.className = 'info-display clickable';
-            // *** UPDATED TEXT: "Số điện thoại:" and "Đang chờ yêu cầu" ***
-            phoneDisplay.innerHTML = `Số điện thoại: <span>Đang chờ yêu cầu</span>`;
-            phoneDisplay.title = 'Click để copy số điện thoại';
-            phoneDisplay.onclick = () => { if (currentPhoneNumber) { copyToClipboard(currentPhoneNumber, 'Đã copy SĐT:'); } };
-            phoneDisplayGroup.appendChild(phoneDisplay);
-            infoSeparator.appendChild(phoneDisplayGroup); // Append to separator
-
-            // --- OTP Code Display (inside separator) ---
-            const otpDisplayGroup = document.createElement('div'); otpDisplayGroup.className = 'info-display-group';
-            const otpDisplay = document.createElement('div'); otpDisplay.id = 'codesim-otp-display'; otpDisplay.className = 'info-display clickable';
-            // *** UPDATED TEXT: "Đang chờ yêu cầu" ***
-            otpDisplay.innerHTML = `OTP: <span>Đang chờ yêu cầu</span>`;
-            otpDisplay.title = 'Click để copy mã OTP';
-            otpDisplay.onclick = () => { if (currentOtpCode) { copyToClipboard(currentOtpCode, 'Đã copy OTP:'); } };
-            otpDisplayGroup.appendChild(otpDisplay);
-            infoSeparator.appendChild(otpDisplayGroup); // Append to separator
-
-            // Action Buttons
-            const buttonGroup = document.createElement('div'); buttonGroup.className = 'button-group';
-            const getOtpButton = document.createElement('button'); getOtpButton.id = 'codesim-get-otp'; getOtpButton.className = 'button primary'; getOtpButton.textContent = 'Lấy số mới'; getOtpButton.onclick = handleGetOtpClick; getOtpButton.disabled = true;
-            buttonGroup.appendChild(getOtpButton);
-            const cancelButton = document.createElement('button'); cancelButton.id = 'codesim-cancel'; cancelButton.className = 'button danger'; cancelButton.textContent = 'Hủy Yêu Cầu'; cancelButton.style.display = 'none'; cancelButton.onclick = handleCancelClick;
-            buttonGroup.appendChild(cancelButton);
-            contentWrapper.appendChild(buttonGroup); // Buttons after separator
-
-            // Status Message Area
-            const statusDisplay = document.createElement('div'); statusDisplay.id = 'codesim-status'; statusDisplay.className = 'status-message';
-            contentWrapper.appendChild(statusDisplay); // Status at the very bottom
-
-        } catch (uiError) {
-            console.error("[CodeSim] Error creating inner UI elements!", uiError);
-            showStatus("Lỗi nghiêm trọng khi tạo giao diện!", true);
-            return;
-        }
-
-        // Apply styles and behaviors
-        addStyles();
-        makeDraggable(container, header);
-
-        // Initial data fetch
-        console.log("[CodeSim] Fetching initial account data...");
-        fetchInitialAccountData();
+        const wrapper = document.createElement('div'); wrapper.id = 'sora-auto-ui';
+        wrapper.style.cssText = `position: fixed; bottom: 15px; left: 20px; background: rgba(35, 35, 40, 0.65); backdrop-filter: blur(10px) saturate(180%); -webkit-backdrop-filter: blur(10px) saturate(180%); padding: 20px 20px 15px 20px; border-radius: 16px; z-index: 999999; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.37); width: 330px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; border: 1px solid rgba(255, 255, 255, 0.12); color: #e0e0e0; transition: opacity 0.3s ease, transform 0.3s ease; opacity: 1; transform: scale(1); display: block;`;
+        wrapper.innerHTML = `
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;"> <h3 style="margin: 0; font-size: 17px; display: flex; align-items: center; gap: 10px; color: #ffffff; font-weight: 500;"> <img src="https://www.svgrepo.com/show/306500/openai.svg" width="22" height="22" style="filter: invert(1);" alt="OpenAI Logo"/> Auto Sora <span style="font-size: 9px; opacity: 0.6; font-weight: 300; margin-left: -5px;">build 4.8</span> </h3> <button id="sora-close" style=" background: rgba(80, 80, 80, 0.4); backdrop-filter: blur(5px) saturate(150%); -webkit-backdrop-filter: blur(5px) saturate(150%); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px; padding: 2px 6px; font-size: 16px; color: rgba(255, 255, 255, 0.7); cursor: pointer; transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease; " onmouseover="this.style.backgroundColor='rgba(100, 100, 100, 0.6)'; this.style.color='rgba(255, 255, 255, 0.9)'; this.style.borderColor='rgba(255, 255, 255, 0.15)'" onmouseout="this.style.backgroundColor='rgba(80, 80, 80, 0.4)'; this.style.color='rgba(255, 255, 255, 0.7)'; this.style.borderColor='rgba(255, 255, 255, 0.1)'" title="Đóng bảng điều khiển">✕</button> </div>
+            <label style="font-size: 13px; color: #bdbdbd; font-weight: 400; margin-bottom: 5px; display: block;">Nhập danh sách prompt:</label> <textarea rows="5" id="sora-input" placeholder="Mỗi dòng tương ứng với một prompt..." style="width: 100%; padding: 12px; border: 1px solid rgba(255, 255, 255, 0.1); background: rgba(0, 0, 0, 0.25); border-radius: 10px; resize: vertical; font-size: 14px; color: #e0e0e0; margin-top: 0px; margin-bottom: 12px; box-sizing: border-box; min-height: 80px;"></textarea>
+            <label style="display: block; font-size: 13px; color: #bdbdbd; font-weight: 400; margin-bottom: 5px;">⏱ Thời gian Cooldown (giây):</label> <input id="sora-cooldown-time" type="number" min="1" value="${cooldownTime}" style="width: 100%; padding: 8px 12px; border: 1px solid rgba(255, 255, 255, 0.1); background: rgba(0, 0, 0, 0.25); color: #e0e0e0; border-radius: 10px; font-size: 14px; margin-top: 0px; box-sizing: border-box; margin-bottom: 15px;" />
+            <div style="display: flex; gap: 10px; margin-bottom: 20px;"> <button id="sora-start" style=" flex: 1; background: rgba(60, 130, 250, 0.5); backdrop-filter: blur(5px) saturate(150%); -webkit-backdrop-filter: blur(5px) saturate(150%); color: white; padding: 10px; border: 1px solid rgba(60, 130, 250, 0.6); border-radius: 10px; cursor: pointer; font-weight: 500; transition: background-color 0.2s ease, border-color 0.2s ease; " onmouseover="this.style.backgroundColor='rgba(60, 130, 250, 0.7)'; this.style.borderColor='rgba(60, 130, 250, 0.8)'" onmouseout="this.style.backgroundColor='rgba(60, 130, 250, 0.5)'; this.style.borderColor='rgba(60, 130, 250, 0.6)'">▶ Bắt đầu</button> <button id="sora-clear" style=" flex: 1; background: rgba(80, 80, 80, 0.5); backdrop-filter: blur(5px) saturate(150%); -webkit-backdrop-filter: blur(5px) saturate(150%); color: #d0d0d0; padding: 10px; border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 10px; cursor: pointer; transition: background-color 0.2s ease, border-color 0.2s ease; " onmouseover="this.style.backgroundColor='rgba(100, 100, 100, 0.6)'; this.style.borderColor='rgba(255, 255, 255, 0.2)'" onmouseout="this.style.backgroundColor='rgba(80, 80, 80, 0.5)'; this.style.borderColor='rgba(255, 255, 255, 0.15)'">🗑️ Xóa</button> </div>
+            <hr style="border: none; border-top: 1px solid rgba(255, 255, 255, 0.1); margin: 18px 0;" />
+            <div style="font-size: 13px; color: #bdbdbd; margin-bottom: 12px; font-weight: 400;">Chọn ảnh tải về:</div> <div style="display: flex; gap: 18px; margin-bottom: 15px; flex-wrap: wrap; justify-content: flex-start; align-items: center;"> <label title="Chỉ chọn các ảnh có chiều ngang lớn hơn chiều dọc" style="display: flex; align-items: center; gap: 7px; font-size: 13px; color: #d0d0d0; cursor: pointer;"> <input type="checkbox" id="sora-select-horizontal" style="transform: scale(1.1); cursor: pointer; accent-color: #4a90e2;" /> Ảnh ngang </label> <label title="Chỉ chọn các ảnh có chiều dọc lớn hơn chiều ngang" style="display: flex; align-items: center; gap: 7px; font-size: 13px; color: #d0d0d0; cursor: pointer;"> <input type="checkbox" id="sora-select-vertical" style="transform: scale(1.1); cursor: pointer; accent-color: #4a90e2;" /> Ảnh dọc </label> <label title="Chỉ chọn các ảnh có chiều rộng bằng chiều cao" style="display: flex; align-items: center; gap: 7px; font-size: 13px; color: #d0d0d0; cursor: pointer;"> <input type="checkbox" id="sora-select-square" style="transform: scale(1.1); cursor: pointer; accent-color: #4a90e2;" /> Ảnh vuông </label> </div>
+            <hr style="border: none; border-top: 1px solid rgba(255, 255, 255, 0.08); margin: 18px 0;" />
+            <div style="font-size: 13px; color: #bdbdbd; margin-bottom: 10px; font-weight: 400;">Tùy chọn Crop ảnh khi tải:</div> <div id="sora-crop-options" style="display: flex; flex-direction: row; flex-wrap: wrap; gap: 15px; margin-bottom: 15px;"> <label style="display: flex; align-items: center; gap: 5px; font-size: 13px; color: #d0d0d0; cursor: pointer;"> <input type="radio" name="sora-crop-option" value="none" checked style="cursor: pointer; accent-color: #4a90e2; transform: scale(1.1);" /> Gốc </label> <label style="display: flex; align-items: center; gap: 5px; font-size: 13px; color: #d0d0d0; cursor: pointer;"> <input type="radio" name="sora-crop-option" value="16:9" style="cursor: pointer; accent-color: #4a90e2; transform: scale(1.1);" /> 16:9 </label> <label style="display: flex; align-items: center; gap: 5px; font-size: 13px; color: #d0d0d0; cursor: pointer;"> <input type="radio" name="sora-crop-option" value="9:16" style="cursor: pointer; accent-color: #4a90e2; transform: scale(1.1);" /> 9:16 </label> <label style="display: flex; align-items: center; gap: 5px; font-size: 13px; color: #d0d0d0; cursor: pointer;"> <input type="radio" name="sora-crop-option" value="1:1" style="cursor: pointer; accent-color: #4a90e2; transform: scale(1.1);" /> 1:1 </label> </div>
+            <div style="display: flex; gap: 10px; margin-top: 20px; align-items: stretch;"> <button id="sora-download-images" style=" flex-grow: 1; background: rgba(46, 160, 67, 0.5); backdrop-filter: blur(5px) saturate(150%); -webkit-backdrop-filter: blur(5px) saturate(150%); color: white; padding: 11px; border: 1px solid rgba(46, 160, 67, 0.6); border-radius: 10px; cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center; gap: 8px; transition: background-color 0.2s ease, border-color 0.2s ease, opacity 0.2s ease; font-weight: 500; " onmouseover="if(!this.disabled) { this.style.backgroundColor='rgba(46, 160, 67, 0.7)'; this.style.borderColor='rgba(46, 160, 67, 0.8)'; }" onmouseout="if(!this.disabled) { this.style.backgroundColor='rgba(46, 160, 67, 0.5)'; this.style.borderColor='rgba(46, 160, 67, 0.6)'; }"> <svg id="sora-download-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-download" viewBox="0 0 16 16" style="display: inline;"> <path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5"/> <path d="M7.646 11.854a.5.5 0 0 0 .708 0l3-3a.5.5 0 0 0-.708-.708L8.5 10.293V1.5a.5.5 0 0 0-1 0v8.793L5.354 8.146a.5.5 0 1 0-.708.708z"/> </svg> <span id="sora-download-text">Tải hình (0)</span> </button> <button id="sora-find-similar-button" title="Kích hoạt chế độ tìm ảnh tương tự" style=" flex-shrink: 0; background: rgba(80, 80, 90, 0.5); backdrop-filter: blur(5px) saturate(150%); -webkit-backdrop-filter: blur(5px) saturate(150%); color: white; padding: 11px 14px; border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 10px; cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center; transition: background-color 0.2s ease, border-color 0.2s ease; " onmouseover="if(!this.classList.contains('active')) { this.style.backgroundColor='rgba(100, 100, 110, 0.6)'; this.style.borderColor='rgba(255, 255, 255, 0.2)'; }" onmouseout="if(!this.classList.contains('active')) { this.style.backgroundColor='rgba(80, 80, 90, 0.5)'; this.style.borderColor='rgba(255, 255, 255, 0.15)'; }"> <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-cursor-fill" viewBox="0 0 16 16"> <path d="M14.082 2.182a.5.5 0 0 1 .103.557L8.528 15.467a.5.5 0 0 1-.917-.007L5.57 10.694.803 8.652a.5.5 0 0 1-.006-.916l12.728-5.657a.5.5 0 0 1 .556.103z"/> </svg> </button> </div>
+            <style> #sora-download-images:disabled { background: rgba(80, 80, 80, 0.3) !important; border-color: rgba(255, 255, 255, 0.08) !important; color: rgba(255, 255, 255, 0.4) !important; backdrop-filter: blur(2px) saturate(100%); -webkit-backdrop-filter: blur(2px) saturate(100%); opacity: 0.6; cursor: not-allowed; } #sora-find-similar-button.active { background-color: rgba(60, 130, 250, 0.65) !important; border-color: rgba(60, 130, 250, 0.8) !important; } </style>
+            <div id="sora-download-progress" style="display: none;"></div>
+            <div id="sora-download-error" style="font-size: 11px; color: #ff8a8a; text-align: center; margin-top: 5px; font-weight: 400;"></div>
+        `;
+        document.body.appendChild(wrapper);
+        let isDragging = false; let offsetX, offsetY; function dragMouseDown(e) { if (e.button !== 0) return; const targetTagName = e.target.tagName.toLowerCase(); const isInteractive = ['input', 'button', 'textarea', 'svg', 'span'].includes(targetTagName) || e.target.closest('button, input, textarea, a, label[style*="cursor: pointer"]'); if (isInteractive) { return; } isDragging = true; wrapper.style.cursor = 'grabbing'; const rect = wrapper.getBoundingClientRect(); offsetX = e.clientX - rect.left; offsetY = e.clientY - rect.top; wrapper.style.bottom = 'auto'; wrapper.style.top = `${rect.top}px`; wrapper.style.left = `${rect.left}px`; document.addEventListener('mousemove', elementDrag); document.addEventListener('mouseup', closeDragElement); e.preventDefault(); } function elementDrag(e) { if (isDragging) { e.preventDefault(); const newTop = e.clientY - offsetY; const newLeft = e.clientX - offsetX; wrapper.style.top = `${newTop}px`; wrapper.style.left = `${newLeft}px`; } } function closeDragElement() { if (isDragging) { isDragging = false; wrapper.style.cursor = 'grab'; document.removeEventListener('mousemove', elementDrag); document.removeEventListener('mouseup', closeDragElement); } } wrapper.addEventListener('mousedown', dragMouseDown); wrapper.style.cursor = 'grab';
+        document.getElementById('sora-start').onclick = handleStart; document.getElementById('sora-clear').onclick = handleClear; document.getElementById('sora-close').onclick = handleClose; document.getElementById('sora-download-images').onclick = handleDownload; document.getElementById('sora-find-similar-button').onclick = toggleFindSimilarMode;
+        document.getElementById('sora-select-horizontal').addEventListener('change', updateImageSelection); document.getElementById('sora-select-vertical').addEventListener('change', updateImageSelection); document.getElementById('sora-select-square').addEventListener('change', updateImageSelection);
+        createAuxiliaryUI();
     }
 
-    /**
-     * Adds the necessary CSS styles for the UI using GM_addStyle.
-     */
-    function addStyles() {
-        GM_addStyle(`
-            /* Dark Mode Glass UI Variables */
-            :root {
-                /* Backgrounds */
-                --bg-color: rgba(30, 30, 40, 0.75);
-                --input-bg: rgba(50, 50, 60, 0.6);
-                --button-bg: rgba(70, 70, 80, 0.6);
-                --button-hover-bg: rgba(90, 90, 100, 0.7);
-                --button-active-bg: rgba(60, 60, 70, 0.8);
-                --button-primary-bg: rgba(13, 110, 253, 0.6);
-                --button-primary-hover-bg: rgba(41, 130, 255, 0.7);
-                --button-danger-bg: rgba(220, 53, 69, 0.6);
-                --button-danger-hover-bg: rgba(230, 76, 92, 0.7);
+    function createAuxiliaryUI() { const auxContainer = document.createElement('div'); auxContainer.id = 'sora-aux-controls-container'; auxContainer.style.cssText = `position: fixed; bottom: 15px; left: 20px; z-index: 999998; display: none; align-items: center; gap: 10px; transition: opacity 0.3s ease; opacity: 1;`; const glassItemStyle = `background: rgba(45, 45, 50, 0.7); backdrop-filter: blur(8px) saturate(150%); -webkit-backdrop-filter: blur(8px) saturate(150%); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 10px; padding: 8px 14px; font-size: 13px; color: #d5d5d5; display: none; white-space: nowrap; box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2); transition: background-color 0.2s ease, border-color 0.2s ease;`; const progress = document.createElement('div'); progress.id = 'sora-progress'; progress.style.cssText = glassItemStyle; progress.textContent = 'Đang xử lý...'; auxContainer.appendChild(progress); const cooldownBtn = document.createElement('button'); cooldownBtn.id = 'sora-cooldown'; cooldownBtn.style.cssText = glassItemStyle + `cursor: default;`; cooldownBtn.textContent = `⏳ Cooldown: ${cooldownTime}s`; auxContainer.appendChild(cooldownBtn); const stopBtn = document.createElement('button'); stopBtn.id = 'sora-stop-button'; stopBtn.style.cssText = glassItemStyle + `background: rgba(200, 50, 60, 0.7); border-color: rgba(255, 99, 132, 0.4); color: white; cursor: pointer; font-weight: 500;`; stopBtn.textContent = '🛑 Dừng'; stopBtn.title = 'Dừng gửi prompt và lưu các prompt còn lại'; stopBtn.onclick = handleStop; stopBtn.onmouseover = function() { this.style.backgroundColor='rgba(220, 53, 69, 0.8)'; this.style.borderColor='rgba(255, 99, 132, 0.6)'; }; stopBtn.onmouseout = function() { this.style.backgroundColor='rgba(200, 50, 60, 0.7)'; this.style.borderColor='rgba(255, 99, 132, 0.4)'; }; auxContainer.appendChild(stopBtn); document.body.appendChild(auxContainer); const miniBtn = document.createElement('div'); miniBtn.id = 'sora-minibtn'; miniBtn.style.cssText = `position: fixed; bottom: 15px; left: 20px; width: 16px; height: 16px; background: rgba(255, 255, 255, 0.8); border-radius: 50%; cursor: pointer; z-index: 999999; box-shadow: 0 0 8px rgba(255, 255, 255, 0.5); display: none; border: 1px solid rgba(255, 255, 255, 0.3); transition: background-color 0.2s ease;`; miniBtn.onmouseover = function() { this.style.backgroundColor='rgba(255, 255, 255, 1)'; }; miniBtn.onmouseout = function() { this.style.backgroundColor='rgba(255, 255, 255, 0.8)'; }; miniBtn.title = 'Mở lại Auto Sora'; miniBtn.onclick = handleMiniButtonClick; document.body.appendChild(miniBtn); }
 
-                /* Status & Info Backgrounds */
-                --success-bg: rgba(40, 167, 69, 0.3);
-                --error-bg: rgba(220, 53, 69, 0.3);
-                --loading-bg: rgba(108, 117, 125, 0.3);
-                --info-bg: rgba(80, 80, 90, 0.4);
-                --info-display-bg: rgba(65, 65, 75, 0.5);
-                --info-display-hover-bg: rgba(85, 85, 95, 0.65);
-                --loading-otp-bg: rgba(40, 167, 69, 0.4); /* Specific green for 'Waiting for OTP' */
+    function handleStart() { const input = document.getElementById('sora-input').value; const prompts = input.split('\n').map(x => x.trim()).filter(Boolean); const cooldownInput = parseInt(document.getElementById('sora-cooldown-time').value); cooldownTime = isNaN(cooldownInput) ? 130 : Math.max(1, cooldownInput); if (prompts.length === 0) return alert("❗ Nhập ít nhất 1 prompt."); if (isRunning) { log("Process already running."); return; } log(`Starting process with ${prompts.length} prompts and ${cooldownTime}s cooldown.`); promptQueue = prompts; totalPromptCount = prompts.length; isRunning = true; const mainUI = document.getElementById('sora-auto-ui'); if (mainUI) { mainUI.style.opacity = '0'; mainUI.style.transform = 'scale(0.95)'; setTimeout(() => { mainUI.style.display = 'none'; }, 300); } document.getElementById('sora-minibtn').style.display = 'none'; const auxContainer = document.getElementById('sora-aux-controls-container'); const progressEl = document.getElementById('sora-progress'); const cooldownEl = document.getElementById('sora-cooldown'); const stopBtn = document.getElementById('sora-stop-button'); if(auxContainer) auxContainer.style.display = 'flex'; if(progressEl) progressEl.style.display = 'inline-block'; if(cooldownEl) cooldownEl.style.display = 'inline-block'; if(stopBtn) stopBtn.style.display = 'inline-block'; updateProgress(); startLoop(); }
+    function handleClear() { document.getElementById('sora-input').value = ''; log("Prompt input cleared."); }
+    function handleClose() { const wrapper = document.getElementById('sora-auto-ui'); if (!wrapper) return; wrapper.style.opacity = '0'; wrapper.style.transform = 'scale(0.95)'; setTimeout(() => { wrapper.style.display = 'none'; if (!isRunning) { const miniBtn = document.getElementById('sora-minibtn'); if (miniBtn) miniBtn.style.display = 'block'; } }, 300); }
+    function handleMiniButtonClick() { if (!isRunning) { const wrapper = document.getElementById('sora-auto-ui'); const miniBtn = document.getElementById('sora-minibtn'); if (wrapper) { wrapper.style.display = 'block'; void wrapper.offsetWidth; wrapper.style.opacity = '1'; wrapper.style.transform = 'scale(1)'; } if (miniBtn) miniBtn.style.display = 'none'; const auxContainer = document.getElementById('sora-aux-controls-container'); if (auxContainer) auxContainer.style.display = 'none'; } else { log("Cannot open UI while process is running."); } }
 
-                /* Effects & Borders */
-                --blur-intensity: 8px;
-                --border-color: rgba(255, 255, 255, 0.1);
-                --input-border: rgba(255, 255, 255, 0.15);
-                --input-focus-border: var(--primary-color);
-                --shadow-color: rgba(0, 0, 0, 0.4);
-                --border-radius: 8px;
-                --info-display-border: rgba(255, 255, 255, 0.12);
-                --separator-border-color: rgba(255, 255, 255, 0.15); /* Color for the separator line */
+    function handleStop() { log("Stop button clicked."); if (!isRunning) { log("Process is not running."); return; } isRunning = false; const done = totalPromptCount - promptQueue.length; const progressEl = document.getElementById('sora-progress'); if(progressEl) { progressEl.textContent = `Đã dừng: ${done} / ${totalPromptCount}`; log(`Process stopped manually after ${done} prompts.`); } if (countdownInterval) { clearInterval(countdownInterval); countdownInterval = null; const cooldownBtn = document.getElementById('sora-cooldown'); if (cooldownBtn) cooldownBtn.textContent = 'Cooldown: --'; log("Cooldown timer cleared."); } if (promptQueue.length > 0) { saveRemainingPromptsToFile(); } else { log("No remaining prompts to save."); } setTimeout(() => { if (!isRunning) { const auxContainer = document.getElementById('sora-aux-controls-container'); if (auxContainer) auxContainer.style.display = 'none'; const miniBtn = document.getElementById('sora-minibtn'); if (miniBtn) miniBtn.style.display = 'block'; totalPromptCount = 0; } }, 4000); }
+    function saveRemainingPromptsToFile() { if (!promptQueue || promptQueue.length === 0) { log("Attempted to save prompts, but queue is empty."); return; } log(`Saving ${promptQueue.length} remaining prompts to file...`); const content = promptQueue.join('\n'); const blob = new Blob([content], { type: 'text/plain;charset=utf-8' }); const filename = `AutoSora_remaining_${getTimestamp()}.txt`; try { triggerDownload(blob, filename); log("Remaining prompts file download triggered."); } catch (e) { log("Error triggering download for remaining prompts file:"); console.error(e); } }
 
-                /* Text & Accent Colors */
-                --text-color: #f0f0f0;
-                --text-color-dim: #a0a0a0;
-                --text-color-strong: #ffffff;
-                --title-color: #64b5f6;
-                --primary-color: #64b5f6;
-                --danger-color: #ef5350;
-                --success-color: #66bb6a;
-                --info-display-text: #e0e0e0;
-                --info-display-label: #b0b0b0; /* Label color for SĐT/OTP */
-            }
+    function updateProgress() { const progressEl = document.getElementById('sora-progress'); const auxContainer = document.getElementById('sora-aux-controls-container'); const cooldownEl = document.getElementById('sora-cooldown'); const stopBtn = document.getElementById('sora-stop-button'); if (!progressEl || !auxContainer) return; const done = totalPromptCount - promptQueue.length; if (isRunning) { progressEl.textContent = `Đã gửi: ${done} / ${totalPromptCount}`; auxContainer.style.display = 'flex'; progressEl.style.display = 'inline-block'; if(cooldownEl) cooldownEl.style.display = 'inline-block'; if(stopBtn) stopBtn.style.display = 'inline-block'; } else { if (totalPromptCount > 0 && done === totalPromptCount) { progressEl.textContent = `Hoàn thành: ${done} / ${totalPromptCount}.`; log(`Finished processing all ${totalPromptCount} prompts.`); } else if (totalPromptCount > 0 && progressEl.textContent.indexOf('Đã dừng') === -1) { progressEl.textContent = `Đã dừng: ${done} / ${totalPromptCount}.`; log(`Process stopped or finished incompletely after ${done} prompts (updateProgress check).`); } else if (totalPromptCount === 0 && progressEl.textContent.indexOf('Đã dừng') === -1) { progressEl.textContent = 'Chưa chạy/Đã dừng.'; } setTimeout(() => { if (!isRunning) { if (auxContainer) auxContainer.style.display = 'none'; const wrapper = document.getElementById('sora-auto-ui'); const miniBtn = document.getElementById('sora-minibtn'); if (wrapper && wrapper.style.display === 'none' && miniBtn) { miniBtn.style.display = 'block'; } if (countdownInterval) { clearInterval(countdownInterval); countdownInterval = null; } if (totalPromptCount > 0 && done === totalPromptCount) { totalPromptCount = 0; } } }, 4000); } }
+    function startCountdown() { let timeRemaining = cooldownTime; const cooldownBtn = document.getElementById('sora-cooldown'); if (!cooldownBtn || !isRunning) return; cooldownBtn.textContent = `⏳ ${timeRemaining}s`; if (countdownInterval) clearInterval(countdownInterval); countdownInterval = setInterval(() => { if (!isRunning) { clearInterval(countdownInterval); countdownInterval = null; const currentBtn = document.getElementById('sora-cooldown'); if(currentBtn) currentBtn.textContent = `⏳ --`; log("Countdown stopped because isRunning is false."); return; } timeRemaining--; const currentBtn = document.getElementById('sora-cooldown'); if (currentBtn) currentBtn.textContent = `⏳ ${timeRemaining}s`; if (timeRemaining <= 0) { clearInterval(countdownInterval); countdownInterval = null; if (currentBtn) currentBtn.textContent = `⏳ 0s`; } }, 1000); }
 
-            /* --- General Styles --- */
-            #codesim-container {
-                position: fixed; width: 300px; background-color: var(--bg-color); border: 1px solid var(--border-color); border-radius: var(--border-radius); z-index: 99999; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; font-size: 14px; box-shadow: 0 8px 32px 0 var(--shadow-color); color: var(--text-color); overflow: hidden; backdrop-filter: blur(var(--blur-intensity)); -webkit-backdrop-filter: blur(var(--blur-intensity)); transition: height 0.3s ease, opacity 0.3s ease, background-color 0.3s ease; height: auto; opacity: 1;
-            }
-            #codesim-container.codesim-minimized { height: 50px; opacity: 0.9; background-color: color-mix(in srgb, var(--bg-color) 80%, black 10%); }
-            #codesim-container.codesim-minimized .codesim-content { display: none; }
-            #codesim-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 15px; border-bottom: 1px solid var(--border-color); background-color: color-mix(in srgb, var(--bg-color) 50%, black 5%); height: 50px; box-sizing: border-box; }
-            #codesim-header h3 { margin: 0; font-size: 16px; color: var(--title-color); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-grow: 1; padding-right: 10px; }
-            .codesim-controls { display: flex; align-items: center; flex-shrink: 0; gap: 8px; }
-            .control-button { background: none; border: none; color: var(--text-color-dim); cursor: pointer; font-size: 22px; padding: 0 5px; line-height: 1; transition: color 0.2s ease, transform 0.2s ease; display: inline-flex; align-items: center; justify-content: center; margin-left: 0; }
-            .control-button.svg-button { font-size: inherit; padding: 3px; }
-            .control-button svg { width: 1em; height: 1em; vertical-align: middle; }
-            .control-button:hover { color: var(--text-color); transform: scale(1.1); }
-            .control-button.close:hover { color: var(--danger-color); }
-            .control-button.minimize:hover { color: var(--primary-color); }
-            .codesim-content { padding: 15px; }
-            .form-group { margin-bottom: 15px; }
-            #codesim-container label { display: block; margin-bottom: 6px; font-weight: 500; color: var(--text-color-dim); font-size: 13px; }
-            #codesim-container select, #codesim-container input[type="text"] { width: 100%; padding: 10px 12px; border: 1px solid var(--input-border); border-radius: 6px; font-size: 14px; box-sizing: border-box; background-color: var(--input-bg); color: var(--text-color); transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.3s ease; appearance: none; -webkit-appearance: none; -moz-appearance: none; }
-            #codesim-container select { background-image: url('data:image/svg+xml;charset=US-ASCII,<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="${encodeURIComponent(getComputedStyle(document.documentElement).getPropertyValue('--text-color-dim').trim() || '#a0a0a0')}" viewBox="0 0 16 16"><path fill-rule="evenodd" d="M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z"/></svg>'); background-repeat: no-repeat; background-position: right 10px center; background-size: 16px 12px; padding-right: 30px; }
-            #codesim-container select:focus, #codesim-container input[type="text"]:focus { border-color: var(--input-focus-border); outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary-color) 30%, transparent); background-color: color-mix(in srgb, var(--input-bg) 90%, black 5%); }
-            .button-group { display: flex; gap: 10px; margin-top: 18px; margin-bottom: 10px; }
-            #codesim-container button.button { flex-grow: 1; border: none; padding: 10px 15px; text-align: center; text-decoration: none; font-size: 14px; border-radius: 6px; cursor: pointer; transition: background-color 0.2s ease, transform 0.1s ease, box-shadow 0.2s ease; font-weight: 600; color: var(--text-color-strong); background-color: var(--button-bg); box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-            #codesim-container button.button:hover:not(:disabled) { box-shadow: 0 4px 8px rgba(0,0,0,0.15); transform: translateY(-1px); }
-            #codesim-container button.button:active:not(:disabled) { transform: translateY(0px); box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
-            #codesim-container button.primary { background-color: var(--button-primary-bg); color: #fff; }
-            #codesim-container button.primary:hover:not(:disabled) { background-color: var(--button-primary-hover-bg); }
-            #codesim-container button.primary:active:not(:disabled) { background-color: color-mix(in srgb, var(--button-primary-bg) 80%, black 5%); }
-            #codesim-container button.danger { background-color: var(--button-danger-bg); color: #fff; }
-            #codesim-container button.danger:hover:not(:disabled) { background-color: var(--button-danger-hover-bg); }
-            #codesim-container button.danger:active:not(:disabled) { background-color: color-mix(in srgb, var(--button-danger-bg) 80%, black 5%); }
-            #codesim-container button.button:disabled { background-color: rgba(90, 90, 100, 0.4); color: var(--text-color-dim); cursor: not-allowed; box-shadow: none; transform: none; opacity: 0.6; }
+    function submitPrompt(prompt) { if (!isRunning) { log("submitPrompt cancelled because isRunning is false."); return; } const textarea = document.querySelector('textarea[placeholder*="Describe your"]'); if (!textarea) { log("Error: Prompt textarea not found. Stopping process."); handleStop(); return; } log(`Submitting prompt: ${prompt.substring(0, 50)}...`); textarea.value = prompt; const key = Object.keys(textarea).find(k => k.startsWith("__reactProps$")); if (key && textarea[key]?.onChange) { try { log("Triggering React onChange..."); textarea[key].onChange({ target: textarea }); } catch (e) { log("Error triggering React onChange:"); console.error(e); } } else { log("Warning: React onChange handler not found. Attempting standard events."); textarea.dispatchEvent(new Event('input', { bubbles: true })); textarea.dispatchEvent(new Event('change', { bubbles: true })); } setTimeout(() => { if (!isRunning) { log("Submit button click cancelled because isRunning is false."); return; } const btn = document.querySelector('button[data-disabled="false"]'); if (btn) { log("Submit button found, attempting React onClick..."); const btnKey = Object.keys(btn).find(k => k.startsWith("__reactProps$")); if (btnKey && btn[btnKey]?.onClick) { try { btn[btnKey].onClick({ bubbles: true, cancelable: true, isTrusted: true }); log("React onClick triggered."); } catch (e) { log("Error triggering React onClick:"); console.error(e); log("Attempting standard .click() as fallback..."); btn.click(); } } else { log("Warning: React onClick handler not found on button. Attempting standard .click()."); btn.click(); } } else { log("Error: Submit button (data-disabled='false') not found after delay."); } }, 600); }
 
-            /* --- Info Separator Styles --- */
-            #codesim-info-separator {
-                margin-top: 15px; /* Space above the separator */
-                padding-top: 15px; /* Space below the separator line */
-                border-top: 1px solid var(--separator-border-color); /* The separator line */
-            }
+    function processNextPrompt() { if (!isRunning || promptQueue.length === 0) { if (isRunning && promptQueue.length === 0) { log("Queue empty. Ending loop naturally."); isRunning = false; } else if (!isRunning) { log("processNextPrompt: Loop stopping because isRunning is false."); } updateProgress(); return; } const currentCooldownInput = parseInt(document.getElementById('sora-cooldown-time')?.value ?? cooldownTime.toString()); const currentCooldown = isNaN(currentCooldownInput) ? cooldownTime : Math.max(1, currentCooldownInput); log(`Waiting ${currentCooldown} seconds for next prompt...`); startCountdown(); setTimeout(() => { if (!isRunning) { log("Process stopped during cooldown wait."); return; } if (promptQueue.length > 0) { const nextPrompt = promptQueue.shift(); log(`Processing next prompt (${totalPromptCount - promptQueue.length}/${totalPromptCount})`); submitPrompt(nextPrompt); updateProgress(); if (promptQueue.length > 0) { processNextPrompt(); } else { log("Last prompt submitted, queue is now empty."); isRunning = false; updateProgress(); } } else { log("Queue became empty unexpectedly during cooldown."); isRunning = false; updateProgress(); } }, currentCooldown * 1000); }
+    function startLoop() { if (!isRunning || promptQueue.length === 0) { log("Loop not started or queue empty."); isRunning = false; updateProgress(); return; } const firstPrompt = promptQueue.shift(); log(`Starting loop, submitting first prompt (1/${totalPromptCount}): ${firstPrompt.substring(0, 50)}...`); submitPrompt(firstPrompt); updateProgress(); if (promptQueue.length > 0) { processNextPrompt(); } else { log("Only one prompt was in the queue. Loop finished."); isRunning = false; updateProgress(); } }
 
-            /* --- Info Display Styles (SĐT/OTP) --- */
-            .info-display-group { margin-bottom: 8px; } /* Spacing between SĐT and OTP */
-            .info-display { background-color: var(--info-display-bg); color: var(--info-display-label); /* Use label color for prefix */ padding: 8px 12px; border-radius: 6px; font-size: 14px; border: 1px solid var(--info-display-border); transition: background-color 0.2s ease, border-color 0.2s ease; word-wrap: break-word; }
-            .info-display span { font-weight: 600; margin-left: 5px; color: var(--info-display-text); /* Use regular info text for value */ }
-            .info-display.clickable { cursor: pointer; }
-            .info-display.clickable:hover { background-color: var(--info-display-hover-bg); border-color: color-mix(in srgb, var(--primary-color) 30%, transparent); }
-            .info-display.clickable:hover::after { content: url('data:image/svg+xml;charset=US-ASCII,<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="${encodeURIComponent(getComputedStyle(document.documentElement).getPropertyValue('--primary-color').trim() || '#64b5f6')}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>'); margin-left: 8px; vertical-align: middle; opacity: 0.8; }
+    // --- Download Logic ---
+    function updateSelectedCount() { const count = selectedImageUrls.size; try { const btnText = document.getElementById("sora-download-text"); const btn = document.getElementById("sora-download-images"); const icon = document.getElementById("sora-download-icon"); const errorEl = document.getElementById("sora-download-error"); if (btnText && btn && !isDownloading) { btnText.textContent = `Tải hình (${count})`; btn.disabled = (count === 0); if (icon) icon.style.display = 'inline'; if (errorEl) errorEl.textContent = ''; } else if (btn) { btn.disabled = true; } } catch (e) { log("Error updating selected count UI:"); console.error(e); } const btn = document.getElementById("sora-download-images"); if (btn && !isDownloading) { btn.disabled = (selectedImageUrls.size === 0); } }
+    async function handleDownload() { const btn = document.getElementById("sora-download-images"); const btnText = document.getElementById("sora-download-text"); const btnIcon = document.getElementById("sora-download-icon"); const errorEl = document.getElementById("sora-download-error"); if (!btn || !btnText || !btnIcon || !errorEl) { log("Error: Download UI elements not found."); return; } if (isDownloading) { log("Download stop requested."); isDownloading = false; btnText.textContent = `Đang dừng...`; return; } const urlsToDownload = Array.from(selectedImageUrls); if (urlsToDownload.length === 0) { errorEl.textContent = "Chưa có ảnh nào được chọn."; setTimeout(() => { if (!isDownloading && errorEl) errorEl.textContent = ''; }, 3000); return; } isDownloading = true; downloadErrors = 0; let successfulCount = 0; const totalFiles = urlsToDownload.length; const selectedCropOption = document.querySelector('input[name="sora-crop-option"]:checked')?.value ?? 'none'; btn.disabled = true; btnIcon.style.display = 'none'; btnText.textContent = `Chuẩn bị... (0/${totalFiles})`; errorEl.textContent = ''; log(`Starting download of ${totalFiles} images... Crop: ${selectedCropOption}`); if (totalFiles === 1) { log("Processing single image download..."); const url = urlsToDownload[0]; btnText.textContent = `Đang xử lý 1 ảnh...`; try { const blob = await convertWebpToPngBlob(url, selectedCropOption); if (blob && isDownloading) { const timestamp = getTimestamp(); const filename = `AutoSora_${selectedCropOption}_${timestamp}.png`; triggerDownload(blob, filename); btnText.textContent = `Đã tải xong 1 ảnh`; successfulCount = 1; } else if (!blob && isDownloading) { downloadErrors = 1; errorEl.textContent = `Lỗi xử lý ảnh. Kiểm tra Console.`; btnText.textContent = `Lỗi tải ảnh`; } else if (!isDownloading) { errorEl.textContent = `Đã dừng tải.`; btnText.textContent = `Đã dừng tải`; } } catch (err) { if (isDownloading) { downloadErrors = 1; log(`Error processing single image (${url.substring(0, 30)}...): ${err.message}`); console.error(err); errorEl.textContent = `Lỗi xử lý ảnh. Kiểm tra Console.`; btnText.textContent = `Lỗi tải ảnh`; } else { errorEl.textContent = `Đã dừng tải.`; btnText.textContent = `Đã dừng tải`; } } finally { const wasDownloading = isDownloading; isDownloading = false; if (btnIcon) btnIcon.style.display = 'inline'; setTimeout(() => { if (!isDownloading) updateSelectedCount(); }, 5000); log(`Single image download process finished (was downloading: ${wasDownloading}).`); } return; } log("Processing multiple images concurrently..."); let processedImageCount = 0; btnText.textContent = `Đang xử lý ảnh: 0/${totalFiles} (0%)`; const conversionPromises = urlsToDownload.map((url, index) => { return convertWebpToPngBlob(url, selectedCropOption) .then(blob => { if (isDownloading) { processedImageCount++; const percentage = ((processedImageCount / totalFiles) * 100).toFixed(0); btnText.textContent = `Đang xử lý ảnh: ${processedImageCount}/${totalFiles} (${percentage}%)`; log(`Processed image ${processedImageCount}/${totalFiles} (Success)`); } return blob; }) .catch(error => { if (isDownloading) { processedImageCount++; const percentage = ((processedImageCount / totalFiles) * 100).toFixed(0); btnText.textContent = `Đang xử lý ảnh: ${processedImageCount}/${totalFiles} (${percentage}%)`; log(`Processed image ${processedImageCount}/${totalFiles} (Failed: ${error.message})`); } throw error; }); }); const results = await Promise.allSettled(conversionPromises); if (!isDownloading) { log("Download stopped during image processing phase."); errorEl.textContent = "Đã dừng tải."; btnText.textContent = "Đã dừng tải"; if(btnIcon) btnIcon.style.display = 'inline'; setTimeout(() => { if (!isDownloading) updateSelectedCount(); }, 5000); return; } log("All image processing settled. Preparing ZIP..."); btnText.textContent = `Đã xử lý ${totalFiles}/${totalFiles} (100%). Chuẩn bị ZIP...`; const zip = new JSZip(); let zipFileCount = 0; results.forEach((result, index) => { if (!isDownloading) return; if (result.status === 'fulfilled' && result.value) { const blob = result.value; const filename = `image_${index + 1}.png`; zip.file(filename, blob); successfulCount++; zipFileCount++; log(`Added ${filename} to zip.`); } else { downloadErrors++; const reason = result.status === 'rejected' ? result.reason : 'Unknown processing error'; log(`Error processing image index ${index} for ZIP: ${reason instanceof Error ? reason.message : reason}`); } }); if (!isDownloading) { log("Download stopped during ZIP preparation."); errorEl.textContent = "Đã dừng tạo ZIP."; btnText.textContent = "Đã dừng tạo ZIP"; if(btnIcon) btnIcon.style.display = 'inline'; setTimeout(() => { if (!isDownloading) updateSelectedCount(); }, 5000); return; } if (successfulCount > 0) { try { log("Generating ZIP file..."); btnText.textContent = 'Đang tạo file ZIP...'; const zipBlob = await zip.generateAsync({ type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 } }, (metadata) => { if (!isDownloading) throw new Error("Zip generation cancelled."); btnText.textContent = `Đang nén ZIP: ${metadata.percent.toFixed(0)}%`; }); if (!isDownloading) { log("Download stopped during ZIP generation."); errorEl.textContent = "Đã dừng tạo ZIP."; btnText.textContent = "Đã dừng tạo ZIP"; } else { const zipFilename = `AutoSora_Bulk_${getTimestamp()}.zip`; triggerDownload(zipBlob, zipFilename); btnText.textContent = `Đã tải xong ${successfulCount}/${totalFiles} ảnh`; if (downloadErrors > 0) { errorEl.textContent = `Có ${downloadErrors} lỗi xảy ra khi xử lý ảnh.`; } log(`ZIP download triggered for ${successfulCount} files.`); } } catch (error) { log("Error during ZIP generation or download:"); console.error(error); if (error.message === "Zip generation cancelled.") { errorEl.textContent = "Đã dừng tạo file ZIP."; btnText.textContent = "Đã dừng tạo ZIP"; } else if (isDownloading){ errorEl.textContent = "Lỗi khi tạo file ZIP. Kiểm tra Console."; btnText.textContent = "Lỗi tạo ZIP"; } else { errorEl.textContent = "Đã dừng."; btnText.textContent = "Đã dừng"; } } } else if (isDownloading) { btnText.textContent = "Lỗi xử lý ảnh"; errorEl.textContent = `Không thể xử lý ảnh nào (${downloadErrors} lỗi).`; log("No images were successfully processed."); } else { log("Download stopped, no successful images to ZIP."); } const wasDownloadingMulti = isDownloading; isDownloading = false; if (btnIcon) btnIcon.style.display = 'inline'; setTimeout(() => { if (!isDownloading) updateSelectedCount(); }, 5000); log(`Multiple image download process finished (was downloading: ${wasDownloadingMulti}).`); }
+    async function convertWebpToPngBlob(url, cropOption = 'none') { try { if (!isDownloading) throw new Error("Download cancelled before fetching."); const response = await fetch(url); if (!response.ok) throw new Error(`Failed to fetch image: ${response.status} ${response.statusText}`); const webpBlob = await response.blob(); if (webpBlob.size === 0) throw new Error("Fetched blob is empty."); if (!isDownloading) throw new Error("Download cancelled after fetching."); const imgBitmap = await createImageBitmap(webpBlob); let sourceX = 0, sourceY = 0; let sourceWidth = imgBitmap.width; let sourceHeight = imgBitmap.height; let targetWidth = imgBitmap.width; let targetHeight = imgBitmap.height; const targetCanvas = document.createElement("canvas"); if (cropOption !== 'none' && sourceWidth > 0 && sourceHeight > 0) { let targetRatio = 1; let canvasTargetWidth = sourceWidth; let canvasTargetHeight = sourceHeight; log(`Applying crop: ${cropOption} to ${sourceWidth}x${sourceHeight}`); switch (cropOption) { case '16:9': targetRatio = 16 / 9; canvasTargetWidth = 1920; canvasTargetHeight = 1080; break; case '9:16': targetRatio = 9 / 16; canvasTargetWidth = 1080; canvasTargetHeight = 1920; break; case '1:1': targetRatio = 1 / 1; canvasTargetWidth = 1080; canvasTargetHeight = 1080; break; } const currentRatio = sourceWidth / sourceHeight; if (Math.abs(currentRatio - targetRatio) < 0.01) { log(`Image already ~${cropOption}, resizing to target.`); } else if (currentRatio > targetRatio) { const idealWidth = sourceHeight * targetRatio; sourceX = (sourceWidth - idealWidth) / 2; sourceWidth = idealWidth; log(`Cropping width: sx=${sourceX.toFixed(0)}, sw=${sourceWidth.toFixed(0)}`); } else { const idealHeight = sourceWidth / targetRatio; sourceY = (sourceHeight - idealHeight) / 2; sourceHeight = idealHeight; log(`Cropping height: sy=${sourceY.toFixed(0)}, sh=${sourceHeight.toFixed(0)}`); } targetWidth = canvasTargetWidth; targetHeight = canvasTargetHeight; log(`Target canvas size set to ${targetWidth}x${targetHeight}`); } else { targetWidth = sourceWidth; targetHeight = sourceHeight; if (cropOption === 'none') log(`No crop applied. Target size: ${targetWidth}x${targetHeight}`); else log(`Crop skipped due to invalid source dimensions. Target size: ${targetWidth}x${targetHeight}`); } if (targetWidth <= 0 || targetHeight <= 0 || sourceWidth <= 0 || sourceHeight <= 0 || sourceX < 0 || sourceY < 0) { throw new Error(`Invalid dimensions calculated: Target ${targetWidth}x${targetHeight}, Source Rect ${sourceWidth.toFixed(0)}x${sourceHeight.toFixed(0)} at (${sourceX.toFixed(0)},${sourceY.toFixed(0)}) from ${imgBitmap.width}x${imgBitmap.height}`); } targetCanvas.width = targetWidth; targetCanvas.height = targetHeight; const ctx = targetCanvas.getContext("2d", { alpha: false }); ctx.imageSmoothingQuality = "high"; ctx.drawImage(imgBitmap, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, targetWidth, targetHeight); return new Promise((resolve, reject) => { if (!isDownloading) return reject(new Error("Download cancelled before blob creation.")); targetCanvas.toBlob(blob => { if (blob) { if (!isDownloading) return reject(new Error("Download cancelled during blob creation.")); log(`Converted ${url.substring(0,30)}... to PNG blob (${(blob.size / 1024).toFixed(1)} KB)`); resolve(blob); } else { reject(new Error("Canvas toBlob returned null.")); } }, "image/png", 0.95); }); } catch (error) { if (error.message.includes("cancelled")) log(`Conversion cancelled for ${url.substring(0,30)}...: ${error.message}`); else { log(`Error converting image ${url.substring(0,30)}...: ${error.message}`); console.error(`Full error for ${url}:`, error); } throw error; } }
 
-            /* Status Messages */
-            .status-message { margin-top: 15px; font-weight: 500; padding: 10px 12px; border-radius: 6px; text-align: center; min-height: 1.5em; border: 1px solid var(--border-color); font-size: 13px; transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease; background-color: var(--info-bg); color: var(--text-color); }
-            .status-message.success { background-color: var(--success-bg); color: var(--success-color); border-color: color-mix(in srgb, var(--success-color) 40%, transparent); }
-            .status-message.error { background-color: var(--error-bg); color: var(--danger-color); border-color: color-mix(in srgb, var(--danger-color) 40%, transparent); }
-            .status-message.loading { background-color: var(--loading-bg); color: var(--text-color-dim); border-color: color-mix(in srgb, var(--text-color-dim) 40%, transparent); }
-            .status-message.loading-otp { background-color: var(--loading-otp-bg); color: var(--success-color); border-color: color-mix(in srgb, var(--success-color) 40%, transparent); }
+    // --- Checkbox Insertion and Image Observation ---
+    function insertCheckbox(img) { try { const a = img.closest('a'); if (!a || a.parentElement?.classList?.contains("sora-image-wrapper")) return; const wrapper = document.createElement("div"); wrapper.className = "sora-image-wrapper"; wrapper.style.position = "relative"; wrapper.style.display = "inline-block"; wrapper.style.margin = "5px"; wrapper.style.verticalAlign = "top"; wrapper.style.lineHeight = "0"; const checkbox = document.createElement("input"); checkbox.type = "checkbox"; checkbox.className = "sora-image-checkbox"; Object.assign(checkbox.style, { position: "absolute", top: "8px", left: "8px", zIndex: "10", width: "18px", height: "18px", cursor: "pointer", transform: "scale(1.3)", accentColor: "#4a90e2" }); checkbox.title = "Chọn/bỏ chọn ảnh này"; const setInitialCheckboxState = () => { try { if (!img.complete || img.naturalWidth === 0 || img.naturalHeight === 0) return; const filterHorizState = document.getElementById('sora-select-horizontal')?.checked ?? false; const filterVertState = document.getElementById('sora-select-vertical')?.checked ?? false; const filterSquareState = document.getElementById('sora-select-square')?.checked ?? false; const imgWidth = img.naturalWidth; const imgHeight = img.naturalHeight; let shouldBeChecked = false; const isHoriz = imgWidth > imgHeight; const isVert = imgHeight > imgWidth; const isSquare = imgWidth === imgHeight; if (!filterHorizState && !filterVertState && !filterSquareState) { shouldBeChecked = false; } else { shouldBeChecked = (filterHorizState && isHoriz) || (filterVertState && isVert) || (filterSquareState && isSquare); } if (checkbox.checked !== shouldBeChecked) { checkbox.checked = shouldBeChecked; } if (shouldBeChecked) { if (!selectedImageUrls.has(img.src)) { selectedImageUrls.add(img.src); updateSelectedCount(); } } else { if (selectedImageUrls.has(img.src)) { selectedImageUrls.delete(img.src); updateSelectedCount(); } } } catch (e) { log(`Error in setInitialCheckboxState for image: ${img.src.substring(0,50)}...`); console.error(e); } }; checkbox.addEventListener("change", (e) => { if (e.target.checked) selectedImageUrls.add(img.src); else selectedImageUrls.delete(img.src); updateSelectedCount(); }); const parent = a.parentElement; if (parent) { parent.insertBefore(wrapper, a); wrapper.appendChild(checkbox); wrapper.appendChild(a); } else { log(`Could not find parent for image link: ${a.href}`); return; } if (img.complete && img.naturalWidth > 0) { setInitialCheckboxState(); } else { img.addEventListener('load', setInitialCheckboxState); img.addEventListener('error', () => log(`Failed to load image for checkbox init: ${img.src.substring(0, 50)}...`)); } } catch (e) { log(`Error inserting checkbox for image: ${img?.src?.substring(0,50)}...`); console.error(e); } }
+    const observer = new MutationObserver((mutations) => { let imagesToCheck = []; for (const mutation of mutations) { if (mutation.type === 'childList') { for (const node of mutation.addedNodes) { if (node.nodeType === 1) { if (node.tagName === 'IMG' && node.parentElement?.tagName === 'A' && !node.closest('.sora-image-wrapper')) { imagesToCheck.push(node); } else if (node.querySelectorAll) { node.querySelectorAll('a > img').forEach(img => { if (!img.closest('.sora-image-wrapper')) imagesToCheck.push(img); }); } } } } } if (imagesToCheck.length > 0) { log(`MutationObserver found ${imagesToCheck.length} new image(s).`); imagesToCheck.forEach(img => insertCheckbox(img)); } });
 
-            /* Balance Display */
-            #codesim-balance-main { text-align: right; font-size: 13px; color: var(--text-color-dim); margin-bottom: 12px; margin-top: -8px; font-weight: 500; height: 1.2em; }
-            #codesim-balance-main[style*="var(--success-color)"] { color: var(--success-color) !important; }
-            #codesim-balance-main[style*="var(--danger-color)"] { color: var(--danger-color) !important; }
-        `);
 
-        // Dynamic update for select arrow color (fallback)
-        try {
-            const selectStyle = Array.from(document.styleSheets).flatMap(sheet => Array.from(sheet.cssRules || [])).find(rule => rule.selectorText === '#codesim-container select');
-            if (selectStyle) {
-                 const dimColor = getComputedStyle(document.documentElement).getPropertyValue('--text-color-dim').trim() || '#a0a0a0';
-                 const svgUrl = `url('data:image/svg+xml;charset=US-ASCII,<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="${encodeURIComponent(dimColor)}" viewBox="0 0 16 16"><path fill-rule="evenodd" d="M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z"/></svg>')`;
-                 if (selectStyle.style.backgroundImage !== svgUrl) { selectStyle.style.backgroundImage = svgUrl; console.log("[CodeSim] Dynamically updated select arrow color."); }
-            }
-        } catch (e) { console.warn("[CodeSim] Could not dynamically update select arrow color.", e); }
-    }
-
-    /**
-     * Makes an element draggable by its handle.
-     * @param {HTMLElement} elmnt The element to make draggable.
-     * @param {HTMLElement} dragHandle The element that acts as the drag handle.
-     */
-    function makeDraggable(elmnt, dragHandle) {
-        let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
-        const dragMouseDown = (e) => {
-            if (e.target.closest('button, select, input')) { return; }
-            e = e || window.event; e.preventDefault();
-            pos3 = e.clientX; pos4 = e.clientY;
-            document.onmouseup = closeDragElement; document.onmousemove = elementDrag;
-        };
-        const elementDrag = (e) => {
-            e = e || window.event; e.preventDefault();
-            pos1 = pos3 - e.clientX; pos2 = pos4 - e.clientY;
-            pos3 = e.clientX; pos4 = e.clientY;
-            let newTop = elmnt.offsetTop - pos2; let newLeft = elmnt.offsetLeft - pos1;
-            const buffer = 10;
-            newTop = Math.max(buffer, Math.min(newTop, window.innerHeight - elmnt.offsetHeight - buffer));
-            newLeft = Math.max(buffer, Math.min(newLeft, window.innerWidth - elmnt.offsetWidth - buffer));
-            elmnt.style.top = newTop + "px"; elmnt.style.left = newLeft + "px";
-            elmnt.style.bottom = "auto"; elmnt.style.right = "auto";
-        };
-        const closeDragElement = () => { document.onmouseup = null; document.onmousemove = null; };
-        if (dragHandle) { dragHandle.onmousedown = dragMouseDown; } else { elmnt.onmousedown = dragMouseDown; }
-    }
-
-    // --- Data Fetching and Handling ---
-
-    /**
-     * Fetches initial account balances and populates the account dropdown.
-     * Selects the last used or highest balance account.
-     */
-    function fetchInitialAccountData() {
-        showStatus("Đang tải thông tin tài khoản...", false, true);
-        const accountNames = Object.keys(ACCOUNTS);
-        accountBalances = {};
-        const balancePromises = accountNames.map(name => {
-            return new Promise((resolve) => {
-                const apiKey = ACCOUNTS[name];
-                apiRequest('GET', '/yourself/information-by-api-key', {},
-                    (data) => resolve({ name: name, balance: data.balance }),
-                    (errorMsg) => { console.error(`[CodeSim] Lỗi lấy số dư ${name}: ${errorMsg}`); resolve({ name: name, balance: null, error: errorMsg }); },
-                    apiKey
-                );
-            });
-        });
-        Promise.allSettled(balancePromises).then(results => {
-            console.log("[CodeSim] Balance fetch results:", results);
-            let highestBalance = -Infinity;
-            let defaultAccount = GM_getValue(LAST_SELECTED_ACCOUNT_KEY, null);
-            let foundDefaultFromStorage = false;
-            let bestFallbackAccount = null;
-            const accountSelect = document.getElementById('codesim-account-select');
-            if (!accountSelect) { console.error("[CodeSim] Account select not found!"); showStatus("Lỗi UI.", true); return; }
-            accountSelect.innerHTML = '';
-            results.forEach(result => {
-                if (result.status === 'fulfilled') {
-                    const { name, balance, error } = result.value;
-                    accountBalances[name] = balance;
-                    const option = document.createElement('option'); option.value = name;
-                    let displayText = name;
-                    if (balance !== null) {
-                        displayText += ` (${balance.toLocaleString('vi-VN')}đ)`;
-                        if (name === defaultAccount) foundDefaultFromStorage = true;
-                        if (balance > highestBalance) { highestBalance = balance; bestFallbackAccount = name; }
-                    } else {
-                        displayText += ` (Lỗi: ${error || 'N/A'})`; // Keep N/A for balance error display
-                        if (name === defaultAccount) { defaultAccount = null; foundDefaultFromStorage = false; }
-                    }
-                    option.textContent = displayText; accountSelect.appendChild(option);
-                } else { console.error("[CodeSim] Balance promise rejected:", result.reason); }
-            });
-            if (!foundDefaultFromStorage) { defaultAccount = bestFallbackAccount; }
-            if (!defaultAccount && accountNames.length > 0) {
-                 const firstValidAccount = accountNames.find(name => accountBalances[name] !== null);
-                 defaultAccount = firstValidAccount || null;
-            }
-            if (defaultAccount) {
-                console.log(`[CodeSim] Setting default account: ${defaultAccount}`);
-                accountSelect.value = defaultAccount;
-                try { handleAccountChangeLogic(defaultAccount); }
-                catch(e) { console.error("[CodeSim] Error initial handleAccountChangeLogic:", e); showStatus("Lỗi khởi tạo tài khoản.", true); }
-            } else {
-                showStatus("Không tải được tài khoản!", true); updateMainBalanceDisplay(); checkAndEnableOtpButton();
-                 if (accountSelect.options.length === 0) { accountSelect.innerHTML = '<option value="">-- Không có TK --</option>'; }
-            }
-        }).catch(error => { console.error("[CodeSim] Promise processing error:", error); showStatus("Lỗi tải dữ liệu tài khoản!", true); });
-    }
-
-    /**
-     * Handles the change event of the account selection dropdown.
-     */
-    function handleAccountChange() {
-        const accountSelect = document.getElementById('codesim-account-select');
-        if (!accountSelect) return;
-        const newAccountName = accountSelect.value;
-        console.log(`[CodeSim] Account changed to: ${newAccountName}`);
-        try { handleAccountChangeLogic(newAccountName); }
-        catch (e) { console.error("[CodeSim] Error handleAccountChange:", e); showStatus("Lỗi chuyển tài khoản.", true); }
-    }
-
-    /**
-     * Core logic when the selected account changes.
-     */
-    function handleAccountChangeLogic(newAccountName) {
-        if (!newAccountName || !ACCOUNTS[newAccountName]) {
-            console.warn(`[CodeSim] Invalid account: ${newAccountName}`);
-            selectedAccountName = null; currentApiKey = null; updateMainBalanceDisplay(); resetOtpState(true); showStatus("Tài khoản không hợp lệ.", true); checkAndEnableOtpButton();
-            const serviceSelect = document.getElementById('codesim-service-select'); const networkSelect = document.getElementById('codesim-network-select');
-            if(serviceSelect) serviceSelect.innerHTML = '<option value="">-- Chọn TK --</option>'; if(networkSelect) networkSelect.innerHTML = '<option value="">-- Chọn TK --</option>';
-            return;
-        }
-        if (currentOtpId) { console.log("[CodeSim] Cancelling active OTP on account change."); clearTimeout(pollingTimeoutId); resetOtpState(true); }
-        selectedAccountName = newAccountName; currentApiKey = ACCOUNTS[selectedAccountName]; GM_setValue(LAST_SELECTED_ACCOUNT_KEY, selectedAccountName);
-        console.log(`[CodeSim] State updated for account: ${selectedAccountName}`);
-        showStatus(`Đã chọn tài khoản: ${selectedAccountName}. Đang tải...`, false, true); updateMainBalanceDisplay(); resetOtpState(false); fetchServicesAndNetworks();
-    }
-
-    /**
-     * Fetches the list of services and networks available for the current API key.
-     */
-    function fetchServicesAndNetworks() {
-        if (!selectedAccountName || !currentApiKey) { console.warn("[CodeSim] fetchServicesAndNetworks no account."); showStatus("Chọn tài khoản hợp lệ.", true); checkAndEnableOtpButton(); return; }
-        showStatus(`Đang tải DV/NM cho ${selectedAccountName}...`, false, true);
-        const getOtpButton = document.getElementById('codesim-get-otp'); if(getOtpButton) getOtpButton.disabled = true;
-        const serviceSelect = document.getElementById('codesim-service-select'); const networkSelect = document.getElementById('codesim-network-select');
-        if (!serviceSelect || !networkSelect) { console.error("[CodeSim] Select elements not found!"); showStatus("Lỗi UI.", true); return; }
-        filteredServices = []; networks = [];
-        serviceSelect.innerHTML = '<option value="">-- Đang tải DV --</option>'; networkSelect.innerHTML = '<option value="">-- Đang tải NM --</option>';
-        const servicePromise = new Promise((resolve, reject) => {
-            apiRequest('GET', '/service/get_service_by_api_key', {}, (data) => {
+    // --- Find Similar Image Mode Functions ---
+    function toggleFindSimilarMode() { isFindSimilarModeActive = !isFindSimilarModeActive; const button = document.getElementById('sora-find-similar-button'); if (button) { if (isFindSimilarModeActive) { button.classList.add('active'); button.title = 'Tắt chế độ tìm ảnh tương tự (Click vào ảnh để tìm)'; log("Find Similar mode ACTIVATED."); } else { button.classList.remove('active'); button.title = 'Kích hoạt chế độ tìm ảnh tương tự'; log("Find Similar mode DEACTIVATED."); } } }
+    // Uses GM_openInTab
+    function handleDocumentClickForSimilar(event) {
+        if (!isFindSimilarModeActive) { return; }
+        const link = event.target.closest('a');
+        if (!link || !link.href) { return; }
+        const soraGenRegex = /^https?:\/\/sora\.com\/g\/(gen_[a-zA-Z0-9]+)/;
+        const match = link.href.match(soraGenRegex);
+        if (match && match[1]) {
+            const genId = match[1];
+            const exploreUrl = `https://sora.com/explore?query=${genId}`;
+            log(`Find Similar Mode: Match found (${genId}). Opening in background: ${exploreUrl}`);
+            event.preventDefault(); event.stopPropagation();
+            // Use GM_openInTab to open in background
+            if (typeof GM_openInTab === 'function') {
                 try {
-                    services = data || [];
-                    filteredServices = services.filter(service => TARGET_SERVICES.includes(service.name) && (service.status === undefined || service.status === 1));
-                    serviceSelect.innerHTML = '';
-                    if (filteredServices.length === 0) { serviceSelect.innerHTML = `<option value="">-- Không có DV (${TARGET_SERVICES.join('/')}) --</option>`; reject(`Không tìm thấy dịch vụ phù hợp.`); return; }
-                    let defaultServiceSelected = false;
-                    filteredServices.sort((a, b) => a.name.localeCompare(b.name));
-                    filteredServices.forEach(service => {
-                        const option = document.createElement('option'); option.value = service.id; option.textContent = `${service.name} (${service.price.toLocaleString('vi-VN')}đ)`; serviceSelect.appendChild(option);
-                        if (service.name === DEFAULT_SERVICE_NAME) { option.selected = true; defaultServiceSelected = true; }
-                    });
-                    if (!defaultServiceSelected && serviceSelect.options.length > 0) { serviceSelect.options[0].selected = true; }
-                    resolve();
-                } catch (e) { console.error("[CodeSim] Error processing services:", e); serviceSelect.innerHTML = '<option value="">-- Lỗi xử lý DV --</option>'; reject("Lỗi xử lý dịch vụ."); }
-            }, (errorMsg) => { serviceSelect.innerHTML = '<option value="">-- Lỗi tải DV --</option>'; reject(`Lỗi tải dịch vụ: ${errorMsg}`); });
-        });
-        const networkPromise = new Promise((resolve) => {
-            apiRequest('GET', '/network/get-network-by-api-key', {}, (data) => {
-                try {
-                    networks = data || []; networkSelect.innerHTML = '<option value="">-- Mặc định (Tất cả) --</option>'; let defaultNetworkSelected = false;
-                    networks.forEach(network => {
-                        if (network.status === 1) {
-                            const option = document.createElement('option'); option.value = network.id; option.textContent = network.name; networkSelect.appendChild(option);
-                            if (network.name === DEFAULT_NETWORK_NAME) { option.selected = true; defaultNetworkSelected = true; }
-                        }
-                    }); resolve();
-                } catch (e) { console.error("[CodeSim] Error processing networks:", e); networkSelect.innerHTML = '<option value="">-- Lỗi xử lý NM --</option>'; resolve(); }
-            }, (errorMsg) => { networkSelect.innerHTML = '<option value="">-- Lỗi tải NM --</option>'; console.warn(`[CodeSim] Lỗi tải nhà mạng: ${errorMsg}.`); resolve(); });
-        });
-        Promise.all([servicePromise, networkPromise]).then(() => {
-            showStatus(`Sẵn sàng cho tài khoản ${selectedAccountName}.`, false); checkAndEnableOtpButton();
-        }).catch(error => { showStatus(error, true); checkAndEnableOtpButton(); });
-    }
-
-    // --- OTP Workflow Functions ---
-
-    /**
-     * Handles the click event of the "Lấy số mới" button.
-     */
-    function handleGetOtpClick() {
-        const serviceSelect = document.getElementById('codesim-service-select'); const networkSelect = document.getElementById('codesim-network-select'); const phonePrefixInput = document.getElementById('codesim-phone-prefix');
-        const getOtpButton = document.getElementById('codesim-get-otp'); const cancelButton = document.getElementById('codesim-cancel');
-        const phoneDisplay = document.getElementById('codesim-phone-display'); const otpDisplay = document.getElementById('codesim-otp-display');
-        if (!serviceSelect || !networkSelect || !phonePrefixInput || !getOtpButton || !cancelButton || !phoneDisplay || !otpDisplay) { console.error("[CodeSim] UI element missing!"); showStatus("Lỗi UI!", true); return; }
-        const serviceId = serviceSelect.value; const networkId = networkSelect.value; const prefix = phonePrefixInput.value.trim();
-        if (!serviceId) { showStatus("Vui lòng chọn dịch vụ.", true); return; }
-        getOtpButton.disabled = true; cancelButton.style.display = 'inline-block'; cancelButton.disabled = false;
-        showStatus("Đang gửi yêu cầu lấy số...", false, true);
-        // *** UPDATED TEXT ***
-        phoneDisplay.innerHTML = `Số điện thoại: <span>Đang lấy...</span>`;
-        otpDisplay.innerHTML = `OTP: <span>---</span>`;
-        currentPhoneNumber = null; currentOtpCode = null;
-        const params = { service_id: serviceId, network_id: networkId || undefined, phone: prefix || undefined };
-        apiRequest('GET', '/sim/get_sim', params, (data) => {
-            if (!data || !data.otpId || !data.simId || !data.phone) { console.error("[CodeSim] Invalid data from /sim/get_sim:", data); showStatus("Lỗi: Dữ liệu SĐT không hợp lệ.", true); resetOtpState(false); return; }
-            currentOtpId = data.otpId; currentSimId = data.simId; currentPhoneNumber = data.phone; currentOtpCode = null;
-            console.log(`[CodeSim] Số đã nhận: ${currentPhoneNumber} (OTP ID: ${currentOtpId}, SIM ID: ${currentSimId})`);
-            // *** UPDATED TEXT ***
-            phoneDisplay.innerHTML = `Số điện thoại: <span>${currentPhoneNumber}</span>`;
-            otpDisplay.innerHTML = `OTP: <span>Đang chờ...</span>`;
-            showStatus('Đang chờ mã OTP...', false, true); // Use specific loading state
-            copyToClipboard(currentPhoneNumber, "Đã tự động copy SĐT:");
-            clearTimeout(pollingTimeoutId); pollingTimeoutId = setTimeout(checkOtpStatus, POLLING_INTERVAL_PENDING);
-            fetchBalanceForCurrentAccount();
-        }, (errorMsg) => {
-            console.error(`[CodeSim] Lỗi lấy số: ${errorMsg}`);
-            if (errorMsg && typeof errorMsg === 'string') {
-                if (errorMsg.includes("hủy phiên")) { showStatus(`Lỗi lấy số: ${errorMsg}. Thử hủy trên web Codesim.`, true); }
-                else if (errorMsg.includes("số dư")) { showStatus(`Lỗi lấy số: ${errorMsg}. Kiểm tra số dư.`, true); }
-                else { showStatus(`Lỗi lấy số: ${errorMsg}`, true); }
-            } else { showStatus('Lỗi không xác định khi lấy số.', true); }
-            resetOtpState(false);
-        });
-    }
-
-    /**
-     * Periodically checks the status of the current OTP request.
-     */
-    function checkOtpStatus() {
-        if (!currentOtpId) { console.warn("[CodeSim] checkOtpStatus no OtpId."); resetOtpState(false); return; }
-        console.log(`[CodeSim] Checking OTP status for ID: ${currentOtpId}`);
-        const statusEl = document.getElementById('codesim-status');
-        if (statusEl && !statusEl.classList.contains('error') && !statusEl.classList.contains('success')) { showStatus('Đang chờ mã OTP...', false, true); }
-        const params = { otp_id: currentOtpId }; const otpDisplay = document.getElementById('codesim-otp-display');
-        apiRequest('GET', '/otp/get_otp_by_phone_api_key', params, (data) => {
-            const otpCode = data ? data.code : null; const content = data ? data.content : null;
-            console.log(`[CodeSim] OTP Check Response: Code=${otpCode}, Content=${content}`);
-            if (otpCode && typeof otpCode === 'string' && otpCode.trim() !== "" && otpCode !== "null") {
-                currentOtpCode = otpCode.trim();
-                console.log(`[CodeSim] OTP Received: ${currentOtpCode}. SMS: ${content}`);
-                if (otpDisplay) { otpDisplay.innerHTML = `OTP: <span>${currentOtpCode}</span>`; }
-                showStatus(`Đã nhận OTP!`, false);
-                copyToClipboard(currentOtpCode, "Đã tự động copy OTP:");
-                clearTimeout(pollingTimeoutId); pollingTimeoutId = null;
-                const cancelButton = document.getElementById('codesim-cancel'); const getOtpButton = document.getElementById('codesim-get-otp');
-                if (cancelButton) cancelButton.style.display = 'none'; if (getOtpButton) getOtpButton.disabled = false;
-                checkAndEnableOtpButton();
+                    GM_openInTab(exploreUrl, { active: false, setParent: true });
+                } catch (e) {
+                     log("Error calling GM_openInTab. Falling back to window.open. Check browser console and Tampermonkey permissions.");
+                     console.error("GM_openInTab error:", e);
+                     window.open(exploreUrl, '_blank'); // Fallback
+                }
             } else {
-                console.log("[CodeSim] OTP not yet available. Polling again.");
-                showStatus('Đang chờ mã OTP...', false, true); // Ensure waiting status persists
-                clearTimeout(pollingTimeoutId); pollingTimeoutId = setTimeout(checkOtpStatus, POLLING_INTERVAL_PENDING);
+                log("Warning: GM_openInTab not available. Falling back to window.open.");
+                window.open(exploreUrl, '_blank');
             }
-        }, (errorMsg) => {
-            console.error(`[CodeSim] Lỗi kiểm tra OTP: ${errorMsg}`);
-            if (errorMsg && typeof errorMsg === 'string' && (errorMsg.includes("Hết hạn") || errorMsg.includes("hủy") || errorMsg.includes("timeout") || errorMsg.includes("không tồn tại"))) {
-                showStatus(`Lỗi OTP: ${errorMsg}. Yêu cầu đã kết thúc.`, true);
-                resetOtpState(false);
-            } else {
-                // On temporary error, show "Waiting..." status instead of error
-                console.warn(`[CodeSim] Lỗi tạm thời khi kiểm tra OTP (${errorMsg}). Sẽ thử lại.`);
-                showStatus('Đang chờ mã OTP...', false, true); // Revert to waiting status
-                clearTimeout(pollingTimeoutId);
-                pollingTimeoutId = setTimeout(checkOtpStatus, POLLING_INTERVAL_PENDING); // Schedule next check
-            }
-        });
-    }
-
-    /**
-     * Handles the click event of the "Hủy Yêu Cầu" button.
-     */
-    function handleCancelClick() {
-        if (!currentSimId) { showStatus("Không có yêu cầu để hủy.", true); resetOtpState(false); return; }
-        console.log(`[CodeSim] Cancelling SIM ID: ${currentSimId}`);
-        showStatus("Đang hủy yêu cầu...", false, true);
-        const cancelButton = document.getElementById('codesim-cancel'); if(cancelButton) cancelButton.disabled = true;
-        const endpoint = `/sim/cancel_api_key/${currentSimId}`; const params = {};
-        apiRequest('GET', endpoint, params, (data) => {
-            showStatus("Yêu cầu hủy đã gửi.", false); console.log("[CodeSim] Cancellation successful.", data);
-            clearTimeout(pollingTimeoutId); resetOtpState(false); fetchBalanceForCurrentAccount();
-        }, (errorMsg) => {
-            showStatus(`Lỗi hủy: ${errorMsg}`, true); console.error(`[CodeSim] Lỗi hủy SIM ID ${currentSimId}: ${errorMsg}`);
-            if(cancelButton) cancelButton.disabled = false;
-        });
-    }
-
-    // --- UI State Management ---
-
-    /**
-     * Resets the state related to an ongoing OTP request.
-     * @param {boolean} resetAccountRelatedUI If true, also clears service/network dropdowns etc.
-     */
-    function resetOtpState(resetAccountRelatedUI = false) {
-        console.log(`[CodeSim] Reset OTP state. Full UI Reset: ${resetAccountRelatedUI}`);
-        clearTimeout(pollingTimeoutId); pollingTimeoutId = null;
-        currentOtpId = null; currentSimId = null; currentPhoneNumber = null; currentOtpCode = null;
-        const getOtpButton = document.getElementById('codesim-get-otp'); const cancelButton = document.getElementById('codesim-cancel');
-        const phonePrefixInput = document.getElementById('codesim-phone-prefix'); const statusDisplay = document.getElementById('codesim-status');
-        const phoneDisplay = document.getElementById('codesim-phone-display'); const otpDisplay = document.getElementById('codesim-otp-display');
-        if (getOtpButton) getOtpButton.disabled = false;
-        if (cancelButton) { cancelButton.style.display = 'none'; cancelButton.disabled = false; }
-        if (phonePrefixInput) phonePrefixInput.value = '';
-        if (statusDisplay && !statusDisplay.classList.contains('error')) { /* Optionally clear */ }
-        // *** UPDATED TEXT ***
-        if (phoneDisplay) phoneDisplay.innerHTML = `Số điện thoại: <span>Đang chờ yêu cầu</span>`;
-        if (otpDisplay) otpDisplay.innerHTML = `OTP: <span>Đang chờ yêu cầu</span>`;
-        if (resetAccountRelatedUI) {
-            const serviceSelect = document.getElementById('codesim-service-select'); const networkSelect = document.getElementById('codesim-network-select');
-            if (serviceSelect) serviceSelect.innerHTML = '<option value="">-- Chọn tài khoản --</option>';
-            if (networkSelect) networkSelect.innerHTML = '<option value="">-- Chọn tài khoản --</option>';
-            if (getOtpButton) getOtpButton.disabled = true;
-        } else {
-            checkAndEnableOtpButton();
-        }
-    }
-
-    /**
-     * Checks conditions and enables/disables the "Lấy số mới" button.
-     */
-    function checkAndEnableOtpButton() {
-        const getOtpButton = document.getElementById('codesim-get-otp'); const serviceSelect = document.getElementById('codesim-service-select');
-        if (getOtpButton && serviceSelect) {
-            const isAccountSelected = !!selectedAccountName; const isServiceSelected = !!serviceSelect.value; const isOtpActive = !!currentOtpId;
-            getOtpButton.disabled = !(isAccountSelected && isServiceSelected && !isOtpActive);
-        } else if (getOtpButton) { getOtpButton.disabled = true; }
-    }
-
-    /**
-     * Fetches the balance specifically for the currently selected account.
-     */
-    function fetchBalanceForCurrentAccount() {
-        if (!selectedAccountName || !currentApiKey) { console.warn("[CodeSim] fetchBalanceForCurrentAccount no account."); return; }
-        console.log(`[CodeSim] Refreshing balance: ${selectedAccountName}`);
-        apiRequest('GET', '/yourself/information-by-api-key', {}, (data) => {
-            const newBalance = data.balance; accountBalances[selectedAccountName] = newBalance;
-            updateMainBalanceDisplay(); updateAccountDropdownBalance(selectedAccountName, newBalance);
-        }, (errorMsg) => {
-            console.error(`[CodeSim] Lỗi refresh balance: ${errorMsg}`); accountBalances[selectedAccountName] = null;
-            updateMainBalanceDisplay(); updateAccountDropdownBalance(selectedAccountName, null, errorMsg);
-        });
-    }
-
-    /**
-     * Updates the text content of a specific account's option in the dropdown.
-     * @param {string} accountName The name of the account to update.
-     * @param {number|null} balance The new balance, or null if error.
-     * @param {string|null} error Optional error message if balance is null.
-     */
-    function updateAccountDropdownBalance(accountName, balance, error = null) {
-        const accountSelect = document.getElementById('codesim-account-select'); if (!accountSelect) return;
-        const option = accountSelect.querySelector(`option[value="${accountName}"]`);
-        if (option) {
-            let displayText = accountName;
-            if (balance !== null) { displayText += ` (${balance.toLocaleString('vi-VN')}đ)`; }
-            else { displayText += ` (Lỗi: ${error || 'N/A'})`; } // Keep N/A for balance error
-            option.textContent = displayText;
         }
     }
 
     // --- Initialization ---
-    function initializeScript() {
-        console.log("[CodeSim] Initializing Script v2.8.2...");
-        if (document.body) { console.log("[CodeSim] Body ready, creating UI."); createUI(); }
-        else { console.log("[CodeSim] Body not ready, waiting DOMContentLoaded."); window.addEventListener('DOMContentLoaded', createUI); }
-    }
-    initializeScript();
+    function waitForElement(selector, callback) { log(`Waiting for element: ${selector}`); let checkCount = 0; const maxChecks = 40; const interval = setInterval(() => { checkCount++; const el = document.querySelector(selector); if (el) { clearInterval(interval); log(`Element found: ${selector}. Initializing...`); try { callback(el); log("Initialization callback executed."); } catch (e) { log("ERROR during initialization callback execution:"); console.error(e); alert("Lỗi nghiêm trọng khi khởi chạy Auto Sora script. Không thể tạo UI. Kiểm tra Console (F12) để biết chi tiết."); } } else if (checkCount >= maxChecks) { clearInterval(interval); log(`Element ${selector} not found after ${maxChecks * 0.5} seconds. Script cannot initialize UI.`); alert(`Auto Sora: Không tìm thấy phần tử quan trọng "${selector}" để khởi chạy UI. Script có thể không hoạt động.`); } }, 500); }
+
+    // --- Script Entry Point ---
+    if (typeof JSZip === 'undefined') { log("FATAL ERROR: JSZip library not loaded."); alert("Lỗi nghiêm trọng: Thư viện JSZip chưa được tải."); return; } else { log("JSZip library loaded successfully."); }
+    if (typeof GM_openInTab === 'undefined') { log("Warning: GM_openInTab is not defined. Make sure the script has the necessary @grant permission in Tampermonkey/Greasemonkey. Background tabs might not work reliably."); }
+
+    waitForElement('textarea[placeholder*="Describe your"]', () => {
+        try {
+            createUI(); log("UI Created.");
+            log("Performing initial scan for images..."); document.querySelectorAll("a > img").forEach(img => { if (!img.closest('.sora-image-wrapper')) insertCheckbox(img); }); log("Initial image scan complete."); updateSelectedCount();
+            log("Starting MutationObserver..."); observer.observe(document.body, { childList: true, subtree: true }); log("MutationObserver started.");
+            document.addEventListener('click', handleDocumentClickForSimilar, true); log("Added global click listener for Find Similar mode.");
+        } catch (e) { log("ERROR during script initialization after element found:"); console.error(e); alert("Đã xảy ra lỗi trong quá trình khởi tạo Auto Sora sau khi tìm thấy phần tử. Kiểm tra Console (F12)."); }
+    });
 
 })();
