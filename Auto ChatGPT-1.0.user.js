@@ -4,7 +4,10 @@
 // @version      1.0
 // @description  Auto ChatGPT
 // @author       Matthew M.
-// @match        https://chatgpt.com/*
+// @match        *://chatgpt.com/*
+// @match        *://*.chatgpt.com/*
+// @match        *://*.chat.openai.com/*
+// @match        *://chat.openai.com/*
 // @grant        GM_addStyle
 // @grant        GM_setValue
 // @grant        GM_getValue
