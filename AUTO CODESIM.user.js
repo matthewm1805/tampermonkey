@@ -1,11 +1,11 @@
 // ==UserScript==
-// @name         Auto Codesim
+// @name         Auto Codesim (Improved - Minimal Info Display)
 // @namespace    http://tampermonkey.net/
-// @version      2.8.3
-// @description  Lấy OTP codesim.net. Hiển thị SĐT/OTP (có separator), click để copy. Góc dưới phải, Glass UI Sáng, Draggable.
+// @version      2.9.1
+// @description  Lấy OTP codesim.net. Tự động chọn TK số dư cao nhất. Hiển thị SĐT/OTP (click text để copy). Thông báo chi tiết. Nút Lấy Số luôn sẵn sàng sau khi thành công. Góc dưới phải, Glass UI Sáng, Draggable.
 // @author       Matthew M.
 // @match        *://automusic.win/*
-// @match        *://www.automusic.win/*
+// @match        *://*.automusic.win/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -34,7 +34,7 @@
     const DEFAULT_POSITION = { top: 'auto', bottom: '20px', left: 'auto', right: '20px' };
     const ICON_MINIMIZE = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line></svg>`;
     const ICON_MAXIMIZE = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>`;
-    const ICON_COPY = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle; margin-left: 5px;"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>`;
+    // Copy icon SVG removed as it's no longer displayed on hover by default
 
     // --- State Variables ---
     let services = []; // Full list from API
@@ -49,12 +49,13 @@
     let selectedAccountName = null; // Currently selected account name
     let currentApiKey = null; // API key for the selected account
     let isMinimized = GM_getValue(MINIMIZED_STATE_KEY, false); // UI minimized state
+    let isFetchingOtp = false; // Flag to prevent spamming get OTP button
 
     // --- Core Functions ---
 
     /**
      * Copies text to the clipboard using GM_setClipboard.
-     * Shows a status message on success or failure.
+     * Shows a status message on success or failure, including the copied text.
      * @param {string | null} text The text to copy.
      * @param {string} successMessagePrefix Prefix for the success message.
      */
@@ -65,6 +66,7 @@
         }
         try {
             GM_setClipboard(text);
+            // --- CHANGE: Display includes the actual copied text ---
             showStatus(`${successMessagePrefix} ${text}`, false); // Show success, not error
             console.log(`[CodeSim] Copied: ${text}`);
         } catch (err) {
@@ -85,24 +87,31 @@
      */
     function apiRequest(method, endpoint, params = {}, callback, onError, specificApiKey = null) {
         const keyToUse = specificApiKey || currentApiKey;
-        if (!keyToUse) {
+        if (!keyToUse && endpoint !== '/yourself/information-by-api-key') { // Allow balance check without selected key initially
             const errorMsg = "Chưa chọn tài khoản!";
             if (onError) onError(errorMsg);
             else showStatus(errorMsg, true);
             console.error("[CodeSim] API Error:", errorMsg);
             return;
         }
-        params.api_key = keyToUse;
+
+        const requestParams = { ...params }; // Clone params
+        if (keyToUse) {
+            requestParams.api_key = keyToUse; // Add API key if available
+        }
+
         const url = new URL(`${API_BASE_URL}${endpoint}`);
         if (method.toUpperCase() === 'GET') {
-             Object.keys(params).forEach(key => {
-                 if (params[key] !== undefined && params[key] !== null && params[key] !== '') {
-                     url.searchParams.append(key, params[key]);
+             Object.keys(requestParams).forEach(key => {
+                 if (requestParams[key] !== undefined && requestParams[key] !== null && requestParams[key] !== '') {
+                     url.searchParams.append(key, requestParams[key]);
                  }
              });
         }
-        const accountLabel = selectedAccountName || 'Init';
+
+        const accountLabel = selectedAccountName || (specificApiKey ? 'BalanceCheck' : 'NoAccount');
         console.log(`[CodeSim ${accountLabel}] Req: ${method} ${url.toString()}`);
+
         GM_xmlhttpRequest({
             method: method.toUpperCase(),
             url: url.toString(),
@@ -152,7 +161,7 @@
         const statusEl = document.getElementById('codesim-status');
         if (statusEl) {
             if (isLoading && message === 'Đang chờ mã OTP...' && statusEl.classList.contains('loading-otp')) {
-                 return;
+                 return; // Avoid flickering if already showing OTP wait status
             }
             statusEl.textContent = message;
             statusEl.className = 'status-message'; // Reset classes
@@ -167,6 +176,7 @@
             } else {
                  statusEl.classList.add('success');
             }
+            // Avoid logging repetitive OTP waiting messages
             if (!isLoading || message !== 'Đang chờ mã OTP...') {
                 console.log(`[CodeSim Status] ${message}`);
             }
@@ -226,7 +236,7 @@
      * Creates the main UI elements and appends them to the body.
      */
     function createUI() {
-        console.log("[CodeSim] Creating UI (v2.8.2 - Text Update)...");
+        console.log("[CodeSim] Creating UI (v2.9.1 - Minimal Info Display)...");
 
         // --- Main Container ---
         const container = document.createElement('div');
@@ -309,27 +319,25 @@
 
             // --- Phone Number Display (inside separator) ---
             const phoneDisplayGroup = document.createElement('div'); phoneDisplayGroup.className = 'info-display-group';
-            const phoneDisplay = document.createElement('div'); phoneDisplay.id = 'codesim-phone-display'; phoneDisplay.className = 'info-display clickable';
-            // *** UPDATED TEXT: "Số điện thoại:" and "Đang chờ yêu cầu" ***
+            const phoneDisplay = document.createElement('div'); phoneDisplay.id = 'codesim-phone-display'; phoneDisplay.className = 'info-display clickable'; // Keep clickable class for cursor
             phoneDisplay.innerHTML = `Số điện thoại: <span>Đang chờ yêu cầu</span>`;
-            phoneDisplay.title = 'Click để copy số điện thoại';
+            phoneDisplay.title = 'Click để copy số điện thoại'; // Tooltip still useful
             phoneDisplay.onclick = () => { if (currentPhoneNumber) { copyToClipboard(currentPhoneNumber, 'Đã copy SĐT:'); } };
             phoneDisplayGroup.appendChild(phoneDisplay);
             infoSeparator.appendChild(phoneDisplayGroup); // Append to separator
 
             // --- OTP Code Display (inside separator) ---
             const otpDisplayGroup = document.createElement('div'); otpDisplayGroup.className = 'info-display-group';
-            const otpDisplay = document.createElement('div'); otpDisplay.id = 'codesim-otp-display'; otpDisplay.className = 'info-display clickable';
-            // *** UPDATED TEXT: "Đang chờ yêu cầu" ***
+            const otpDisplay = document.createElement('div'); otpDisplay.id = 'codesim-otp-display'; otpDisplay.className = 'info-display clickable'; // Keep clickable class for cursor
             otpDisplay.innerHTML = `OTP: <span>Đang chờ yêu cầu</span>`;
-            otpDisplay.title = 'Click để copy mã OTP';
+            otpDisplay.title = 'Click để copy mã OTP'; // Tooltip still useful
             otpDisplay.onclick = () => { if (currentOtpCode) { copyToClipboard(currentOtpCode, 'Đã copy OTP:'); } };
             otpDisplayGroup.appendChild(otpDisplay);
             infoSeparator.appendChild(otpDisplayGroup); // Append to separator
 
             // Action Buttons
             const buttonGroup = document.createElement('div'); buttonGroup.className = 'button-group';
-            const getOtpButton = document.createElement('button'); getOtpButton.id = 'codesim-get-otp'; getOtpButton.className = 'button primary'; getOtpButton.textContent = 'Lấy số mới'; getOtpButton.onclick = handleGetOtpClick; getOtpButton.disabled = true;
+            const getOtpButton = document.createElement('button'); getOtpButton.id = 'codesim-get-otp'; getOtpButton.className = 'button primary'; getOtpButton.textContent = 'Lấy số mới'; getOtpButton.onclick = handleGetOtpClick; getOtpButton.disabled = true; // Initially disabled
             buttonGroup.appendChild(getOtpButton);
             const cancelButton = document.createElement('button'); cancelButton.id = 'codesim-cancel'; cancelButton.className = 'button danger'; cancelButton.textContent = 'Hủy Yêu Cầu'; cancelButton.style.display = 'none'; cancelButton.onclick = handleCancelClick;
             buttonGroup.appendChild(cancelButton);
@@ -351,11 +359,12 @@
 
         // Initial data fetch
         console.log("[CodeSim] Fetching initial account data...");
-        fetchInitialAccountData();
+        fetchInitialAccountData(); // This will now automatically select the best account
     }
 
     /**
      * Adds the necessary CSS styles for the UI using GM_addStyle.
+     * **MODIFIED:** Styles for info-display changed to remove border/button look.
      */
     function addStyles() {
         GM_addStyle(`
@@ -376,9 +385,9 @@
                 --success-bg: rgba(40, 167, 69, 0.3);
                 --error-bg: rgba(220, 53, 69, 0.3);
                 --loading-bg: rgba(108, 117, 125, 0.3);
-                --info-bg: rgba(80, 80, 90, 0.4);
-                --info-display-bg: rgba(65, 65, 75, 0.5);
-                --info-display-hover-bg: rgba(85, 85, 95, 0.65);
+                /* --info-bg: rgba(80, 80, 90, 0.4); REMOVED Default info bg */
+                /* --info-display-bg: rgba(65, 65, 75, 0.5); REMOVED - Now transparent */
+                /* --info-display-hover-bg: rgba(85, 85, 95, 0.65); REMOVED - No bg change on hover */
                 --loading-otp-bg: rgba(40, 167, 69, 0.4); /* Specific green for 'Waiting for OTP' */
 
                 /* Effects & Borders */
@@ -388,7 +397,7 @@
                 --input-focus-border: var(--primary-color);
                 --shadow-color: rgba(0, 0, 0, 0.4);
                 --border-radius: 8px;
-                --info-display-border: rgba(255, 255, 255, 0.12);
+                /* --info-display-border: rgba(255, 255, 255, 0.12); REMOVED - No border */
                 --separator-border-color: rgba(255, 255, 255, 0.15); /* Color for the separator line */
 
                 /* Text & Accent Colors */
@@ -443,16 +452,38 @@
                 border-top: 1px solid var(--separator-border-color); /* The separator line */
             }
 
-            /* --- Info Display Styles (SĐT/OTP) --- */
+            /* --- Info Display Styles (SĐT/OTP) - MODIFIED --- */
             .info-display-group { margin-bottom: 8px; } /* Spacing between SĐT and OTP */
-            .info-display { background-color: var(--info-display-bg); color: var(--info-display-label); /* Use label color for prefix */ padding: 8px 12px; border-radius: 6px; font-size: 14px; border: 1px solid var(--info-display-border); transition: background-color 0.2s ease, border-color 0.2s ease; word-wrap: break-word; }
-            .info-display span { font-weight: 600; margin-left: 5px; color: var(--info-display-text); /* Use regular info text for value */ }
-            .info-display.clickable { cursor: pointer; }
-            .info-display.clickable:hover { background-color: var(--info-display-hover-bg); border-color: color-mix(in srgb, var(--primary-color) 30%, transparent); }
-            .info-display.clickable:hover::after { content: url('data:image/svg+xml;charset=US-ASCII,<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="${encodeURIComponent(getComputedStyle(document.documentElement).getPropertyValue('--primary-color').trim() || '#64b5f6')}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>'); margin-left: 8px; vertical-align: middle; opacity: 0.8; }
+            .info-display {
+                background-color: transparent; /* MODIFIED: Removed background */
+                color: var(--info-display-label); /* Use label color for prefix */
+                padding: 2px 0; /* MODIFIED: Minimal padding */
+                border: none; /* MODIFIED: Removed border */
+                border-radius: 0; /* MODIFIED: No border radius needed */
+                font-size: 14px;
+                transition: none; /* MODIFIED: Removed transition for background/border */
+                word-wrap: break-word;
+            }
+            .info-display span {
+                font-weight: 600;
+                margin-left: 5px;
+                color: var(--info-display-text); /* Use regular info text for value */
+            }
+            .info-display.clickable {
+                 cursor: pointer; /* Keep pointer cursor */
+            }
+            .info-display.clickable:hover {
+                 /* MODIFIED: No background or border change on hover */
+                 color: var(--primary-color); /* Optional: Highlight text color on hover */
+            }
+            .info-display.clickable:hover span {
+                 color: var(--primary-color); /* Optional: Highlight text color on hover */
+            }
+            /* MODIFIED: Removed the ::after rule for copy icon on hover */
+
 
             /* Status Messages */
-            .status-message { margin-top: 15px; font-weight: 500; padding: 10px 12px; border-radius: 6px; text-align: center; min-height: 1.5em; border: 1px solid var(--border-color); font-size: 13px; transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease; background-color: var(--info-bg); color: var(--text-color); }
+            .status-message { margin-top: 15px; font-weight: 500; padding: 10px 12px; border-radius: 6px; text-align: center; min-height: 1.5em; border: 1px solid var(--border-color); font-size: 13px; transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease; background-color: var(--info-bg, rgba(80, 80, 90, 0.4)); /* Added fallback info-bg */ color: var(--text-color); }
             .status-message.success { background-color: var(--success-bg); color: var(--success-color); border-color: color-mix(in srgb, var(--success-color) 40%, transparent); }
             .status-message.error { background-color: var(--error-bg); color: var(--danger-color); border-color: color-mix(in srgb, var(--danger-color) 40%, transparent); }
             .status-message.loading { background-color: var(--loading-bg); color: var(--text-color-dim); border-color: color-mix(in srgb, var(--text-color-dim) 40%, transparent); }
@@ -483,7 +514,7 @@
     function makeDraggable(elmnt, dragHandle) {
         let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
         const dragMouseDown = (e) => {
-            if (e.target.closest('button, select, input')) { return; }
+            if (e.target.closest('button, select, input, .clickable')) { return; } // Don't drag if clicking interactive elements including clickable info
             e = e || window.event; e.preventDefault();
             pos3 = e.clientX; pos4 = e.clientY;
             document.onmouseup = closeDragElement; document.onmousemove = elementDrag;
@@ -493,7 +524,7 @@
             pos1 = pos3 - e.clientX; pos2 = pos4 - e.clientY;
             pos3 = e.clientX; pos4 = e.clientY;
             let newTop = elmnt.offsetTop - pos2; let newLeft = elmnt.offsetLeft - pos1;
-            const buffer = 10;
+            const buffer = 10; // Prevent dragging completely off-screen
             newTop = Math.max(buffer, Math.min(newTop, window.innerHeight - elmnt.offsetHeight - buffer));
             newLeft = Math.max(buffer, Math.min(newLeft, window.innerWidth - elmnt.offsetWidth - buffer));
             elmnt.style.top = newTop + "px"; elmnt.style.left = newLeft + "px";
@@ -507,63 +538,80 @@
 
     /**
      * Fetches initial account balances and populates the account dropdown.
-     * Selects the last used or highest balance account.
+     * Selects the account with the highest balance automatically.
      */
     function fetchInitialAccountData() {
         showStatus("Đang tải thông tin tài khoản...", false, true);
         const accountNames = Object.keys(ACCOUNTS);
-        accountBalances = {};
+        accountBalances = {}; // Reset balances
         const balancePromises = accountNames.map(name => {
             return new Promise((resolve) => {
                 const apiKey = ACCOUNTS[name];
                 apiRequest('GET', '/yourself/information-by-api-key', {},
                     (data) => resolve({ name: name, balance: data.balance }),
                     (errorMsg) => { console.error(`[CodeSim] Lỗi lấy số dư ${name}: ${errorMsg}`); resolve({ name: name, balance: null, error: errorMsg }); },
-                    apiKey
+                    apiKey // Pass the specific API key
                 );
             });
         });
+
         Promise.allSettled(balancePromises).then(results => {
             console.log("[CodeSim] Balance fetch results:", results);
             let highestBalance = -Infinity;
-            let defaultAccount = GM_getValue(LAST_SELECTED_ACCOUNT_KEY, null);
-            let foundDefaultFromStorage = false;
-            let bestFallbackAccount = null;
+            let accountWithHighestBalance = null;
             const accountSelect = document.getElementById('codesim-account-select');
             if (!accountSelect) { console.error("[CodeSim] Account select not found!"); showStatus("Lỗi UI.", true); return; }
-            accountSelect.innerHTML = '';
+
+            accountSelect.innerHTML = ''; // Clear existing options
+
             results.forEach(result => {
                 if (result.status === 'fulfilled') {
                     const { name, balance, error } = result.value;
-                    accountBalances[name] = balance;
-                    const option = document.createElement('option'); option.value = name;
+                    accountBalances[name] = balance; // Store balance (or null on error)
+
+                    const option = document.createElement('option');
+                    option.value = name;
                     let displayText = name;
                     if (balance !== null) {
                         displayText += ` (${balance.toLocaleString('vi-VN')}đ)`;
-                        if (name === defaultAccount) foundDefaultFromStorage = true;
-                        if (balance > highestBalance) { highestBalance = balance; bestFallbackAccount = name; }
+                        if (balance > highestBalance) {
+                            highestBalance = balance;
+                            accountWithHighestBalance = name;
+                        }
                     } else {
-                        displayText += ` (Lỗi: ${error || 'N/A'})`; // Keep N/A for balance error display
-                        if (name === defaultAccount) { defaultAccount = null; foundDefaultFromStorage = false; }
+                        displayText += ` (Lỗi: ${error || 'N/A'})`;
                     }
-                    option.textContent = displayText; accountSelect.appendChild(option);
-                } else { console.error("[CodeSim] Balance promise rejected:", result.reason); }
+                    option.textContent = displayText;
+                    accountSelect.appendChild(option);
+                } else {
+                    console.error("[CodeSim] Balance promise rejected:", result.reason);
+                }
             });
-            if (!foundDefaultFromStorage) { defaultAccount = bestFallbackAccount; }
-            if (!defaultAccount && accountNames.length > 0) {
-                 const firstValidAccount = accountNames.find(name => accountBalances[name] !== null);
-                 defaultAccount = firstValidAccount || null;
+
+            let accountToSelect = accountWithHighestBalance;
+
+            if (!accountToSelect && accountNames.length > 0) {
+                accountToSelect = accountNames[0];
+                console.warn("[CodeSim] No valid balances found, selecting first account as fallback.");
             }
-            if (defaultAccount) {
-                console.log(`[CodeSim] Setting default account: ${defaultAccount}`);
-                accountSelect.value = defaultAccount;
-                try { handleAccountChangeLogic(defaultAccount); }
+
+            if (accountToSelect) {
+                console.log(`[CodeSim] Automatically selecting account with highest balance: ${accountToSelect} (${highestBalance > -Infinity ? highestBalance.toLocaleString('vi-VN') + 'đ' : 'N/A'})`);
+                accountSelect.value = accountToSelect;
+                try { handleAccountChangeLogic(accountToSelect); }
                 catch(e) { console.error("[CodeSim] Error initial handleAccountChangeLogic:", e); showStatus("Lỗi khởi tạo tài khoản.", true); }
             } else {
-                showStatus("Không tải được tài khoản!", true); updateMainBalanceDisplay(); checkAndEnableOtpButton();
-                 if (accountSelect.options.length === 0) { accountSelect.innerHTML = '<option value="">-- Không có TK --</option>'; }
+                showStatus("Không tải được tài khoản hoặc không có tài khoản nào!", true);
+                updateMainBalanceDisplay();
+                checkAndEnableOtpButton();
+                 if (accountSelect.options.length === 0) {
+                     accountSelect.innerHTML = '<option value="">-- Không có TK --</option>';
+                 }
             }
-        }).catch(error => { console.error("[CodeSim] Promise processing error:", error); showStatus("Lỗi tải dữ liệu tài khoản!", true); });
+        }).catch(error => {
+            console.error("[CodeSim] Error processing balance promises:", error);
+            showStatus("Lỗi tải dữ liệu tài khoản!", true);
+        });
     }
 
     /**
@@ -574,8 +622,12 @@
         if (!accountSelect) return;
         const newAccountName = accountSelect.value;
         console.log(`[CodeSim] Account changed to: ${newAccountName}`);
-        try { handleAccountChangeLogic(newAccountName); }
-        catch (e) { console.error("[CodeSim] Error handleAccountChange:", e); showStatus("Lỗi chuyển tài khoản.", true); }
+        try {
+            handleAccountChangeLogic(newAccountName);
+        } catch (e) {
+            console.error("[CodeSim] Error handleAccountChange:", e);
+            showStatus("Lỗi chuyển tài khoản.", true);
+        }
     }
 
     /**
@@ -583,64 +635,149 @@
      */
     function handleAccountChangeLogic(newAccountName) {
         if (!newAccountName || !ACCOUNTS[newAccountName]) {
-            console.warn(`[CodeSim] Invalid account: ${newAccountName}`);
-            selectedAccountName = null; currentApiKey = null; updateMainBalanceDisplay(); resetOtpState(true); showStatus("Tài khoản không hợp lệ.", true); checkAndEnableOtpButton();
-            const serviceSelect = document.getElementById('codesim-service-select'); const networkSelect = document.getElementById('codesim-network-select');
-            if(serviceSelect) serviceSelect.innerHTML = '<option value="">-- Chọn TK --</option>'; if(networkSelect) networkSelect.innerHTML = '<option value="">-- Chọn TK --</option>';
+            console.warn(`[CodeSim] Invalid account selected: ${newAccountName}`);
+            selectedAccountName = null;
+            currentApiKey = null;
+            updateMainBalanceDisplay();
+            resetOtpState(true);
+            showStatus("Tài khoản không hợp lệ.", true);
+            checkAndEnableOtpButton();
+            const serviceSelect = document.getElementById('codesim-service-select');
+            const networkSelect = document.getElementById('codesim-network-select');
+            if(serviceSelect) serviceSelect.innerHTML = '<option value="">-- Chọn TK --</option>';
+            if(networkSelect) networkSelect.innerHTML = '<option value="">-- Chọn TK --</option>';
             return;
         }
-        if (currentOtpId) { console.log("[CodeSim] Cancelling active OTP on account change."); clearTimeout(pollingTimeoutId); resetOtpState(true); }
-        selectedAccountName = newAccountName; currentApiKey = ACCOUNTS[selectedAccountName]; GM_setValue(LAST_SELECTED_ACCOUNT_KEY, selectedAccountName);
+
+        if (currentOtpId || isFetchingOtp) {
+            console.log("[CodeSim] Cancelling active request/polling on account change.");
+            clearTimeout(pollingTimeoutId); pollingTimeoutId = null;
+            resetOtpState(true); // Full UI reset needed when switching
+        }
+
+        selectedAccountName = newAccountName;
+        currentApiKey = ACCOUNTS[selectedAccountName];
+        GM_setValue(LAST_SELECTED_ACCOUNT_KEY, selectedAccountName);
+
         console.log(`[CodeSim] State updated for account: ${selectedAccountName}`);
-        showStatus(`Đã chọn tài khoản: ${selectedAccountName}. Đang tải...`, false, true); updateMainBalanceDisplay(); resetOtpState(false); fetchServicesAndNetworks();
+        showStatus(`Đã chọn tài khoản: ${selectedAccountName}. Đang tải...`, false, true);
+        updateMainBalanceDisplay();
+        resetOtpState(false); // Reset OTP fields, keep selections
+        fetchServicesAndNetworks();
     }
+
 
     /**
      * Fetches the list of services and networks available for the current API key.
      */
     function fetchServicesAndNetworks() {
-        if (!selectedAccountName || !currentApiKey) { console.warn("[CodeSim] fetchServicesAndNetworks no account."); showStatus("Chọn tài khoản hợp lệ.", true); checkAndEnableOtpButton(); return; }
+        if (!selectedAccountName || !currentApiKey) {
+            console.warn("[CodeSim] fetchServicesAndNetworks called without a selected account.");
+            showStatus("Chọn tài khoản hợp lệ.", true);
+            checkAndEnableOtpButton();
+            return;
+        }
         showStatus(`Đang tải DV/NM cho ${selectedAccountName}...`, false, true);
-        const getOtpButton = document.getElementById('codesim-get-otp'); if(getOtpButton) getOtpButton.disabled = true;
-        const serviceSelect = document.getElementById('codesim-service-select'); const networkSelect = document.getElementById('codesim-network-select');
-        if (!serviceSelect || !networkSelect) { console.error("[CodeSim] Select elements not found!"); showStatus("Lỗi UI.", true); return; }
-        filteredServices = []; networks = [];
-        serviceSelect.innerHTML = '<option value="">-- Đang tải DV --</option>'; networkSelect.innerHTML = '<option value="">-- Đang tải NM --</option>';
+        const getOtpButton = document.getElementById('codesim-get-otp');
+        if(getOtpButton) getOtpButton.disabled = true;
+
+        const serviceSelect = document.getElementById('codesim-service-select');
+        const networkSelect = document.getElementById('codesim-network-select');
+        if (!serviceSelect || !networkSelect) {
+            console.error("[CodeSim] Select elements not found!");
+            showStatus("Lỗi UI.", true); return;
+        }
+
+        filteredServices = [];
+        networks = [];
+        serviceSelect.innerHTML = '<option value="">-- Đang tải DV --</option>';
+        networkSelect.innerHTML = '<option value="">-- Đang tải NM --</option>';
+
         const servicePromise = new Promise((resolve, reject) => {
             apiRequest('GET', '/service/get_service_by_api_key', {}, (data) => {
                 try {
                     services = data || [];
-                    filteredServices = services.filter(service => TARGET_SERVICES.includes(service.name) && (service.status === undefined || service.status === 1));
+                    filteredServices = services.filter(service =>
+                        TARGET_SERVICES.includes(service.name) &&
+                        (service.status === undefined || service.status === 1)
+                    );
+
                     serviceSelect.innerHTML = '';
-                    if (filteredServices.length === 0) { serviceSelect.innerHTML = `<option value="">-- Không có DV (${TARGET_SERVICES.join('/')}) --</option>`; reject(`Không tìm thấy dịch vụ phù hợp.`); return; }
+                    if (filteredServices.length === 0) {
+                        serviceSelect.innerHTML = `<option value="">-- Không có DV (${TARGET_SERVICES.join('/')}) --</option>`;
+                        reject(`Không tìm thấy dịch vụ phù hợp.`);
+                        return;
+                    }
+
                     let defaultServiceSelected = false;
                     filteredServices.sort((a, b) => a.name.localeCompare(b.name));
+
                     filteredServices.forEach(service => {
-                        const option = document.createElement('option'); option.value = service.id; option.textContent = `${service.name} (${service.price.toLocaleString('vi-VN')}đ)`; serviceSelect.appendChild(option);
-                        if (service.name === DEFAULT_SERVICE_NAME) { option.selected = true; defaultServiceSelected = true; }
+                        const option = document.createElement('option');
+                        option.value = service.id;
+                        option.textContent = `${service.name} (${service.price.toLocaleString('vi-VN')}đ)`;
+                        serviceSelect.appendChild(option);
+                        if (service.name === DEFAULT_SERVICE_NAME) {
+                            option.selected = true;
+                            defaultServiceSelected = true;
+                        }
                     });
-                    if (!defaultServiceSelected && serviceSelect.options.length > 0) { serviceSelect.options[0].selected = true; }
+
+                    if (!defaultServiceSelected && serviceSelect.options.length > 0) {
+                        serviceSelect.options[0].selected = true;
+                    }
                     resolve();
-                } catch (e) { console.error("[CodeSim] Error processing services:", e); serviceSelect.innerHTML = '<option value="">-- Lỗi xử lý DV --</option>'; reject("Lỗi xử lý dịch vụ."); }
-            }, (errorMsg) => { serviceSelect.innerHTML = '<option value="">-- Lỗi tải DV --</option>'; reject(`Lỗi tải dịch vụ: ${errorMsg}`); });
+                } catch (e) {
+                    console.error("[CodeSim] Error processing services:", e);
+                    serviceSelect.innerHTML = '<option value="">-- Lỗi xử lý DV --</option>';
+                    reject("Lỗi xử lý dịch vụ.");
+                }
+            }, (errorMsg) => {
+                serviceSelect.innerHTML = '<option value="">-- Lỗi tải DV --</option>';
+                reject(`Lỗi tải dịch vụ: ${errorMsg}`);
+            });
         });
+
         const networkPromise = new Promise((resolve) => {
             apiRequest('GET', '/network/get-network-by-api-key', {}, (data) => {
                 try {
-                    networks = data || []; networkSelect.innerHTML = '<option value="">-- Mặc định (Tất cả) --</option>'; let defaultNetworkSelected = false;
+                    networks = data || [];
+                    networkSelect.innerHTML = '<option value="">-- Mặc định (Tất cả) --</option>';
+                    let defaultNetworkSelected = false;
                     networks.forEach(network => {
                         if (network.status === 1) {
-                            const option = document.createElement('option'); option.value = network.id; option.textContent = network.name; networkSelect.appendChild(option);
-                            if (network.name === DEFAULT_NETWORK_NAME) { option.selected = true; defaultNetworkSelected = true; }
+                            const option = document.createElement('option');
+                            option.value = network.id;
+                            option.textContent = network.name;
+                            networkSelect.appendChild(option);
+                            if (network.name === DEFAULT_NETWORK_NAME) {
+                                option.selected = true;
+                                defaultNetworkSelected = true;
+                            }
                         }
-                    }); resolve();
-                } catch (e) { console.error("[CodeSim] Error processing networks:", e); networkSelect.innerHTML = '<option value="">-- Lỗi xử lý NM --</option>'; resolve(); }
-            }, (errorMsg) => { networkSelect.innerHTML = '<option value="">-- Lỗi tải NM --</option>'; console.warn(`[CodeSim] Lỗi tải nhà mạng: ${errorMsg}.`); resolve(); });
+                    });
+                    resolve();
+                } catch (e) {
+                    console.error("[CodeSim] Error processing networks:", e);
+                    networkSelect.innerHTML = '<option value="">-- Lỗi xử lý NM --</option>';
+                    resolve();
+                }
+            }, (errorMsg) => {
+                networkSelect.innerHTML = '<option value="">-- Lỗi tải NM --</option>';
+                console.warn(`[CodeSim] Lỗi tải nhà mạng: ${errorMsg}. Proceeding without network filter.`);
+                resolve();
+            });
         });
+
         Promise.all([servicePromise, networkPromise]).then(() => {
-            showStatus(`Sẵn sàng cho tài khoản ${selectedAccountName}.`, false); checkAndEnableOtpButton();
-        }).catch(error => { showStatus(error, true); checkAndEnableOtpButton(); });
+            showStatus(`Sẵn sàng cho tài khoản ${selectedAccountName}.`, false);
+            checkAndEnableOtpButton();
+        }).catch(error => {
+            showStatus(error, true);
+            checkAndEnableOtpButton();
+        });
     }
+
 
     // --- OTP Workflow Functions ---
 
@@ -648,79 +785,167 @@
      * Handles the click event of the "Lấy số mới" button.
      */
     function handleGetOtpClick() {
-        const serviceSelect = document.getElementById('codesim-service-select'); const networkSelect = document.getElementById('codesim-network-select'); const phonePrefixInput = document.getElementById('codesim-phone-prefix');
-        const getOtpButton = document.getElementById('codesim-get-otp'); const cancelButton = document.getElementById('codesim-cancel');
-        const phoneDisplay = document.getElementById('codesim-phone-display'); const otpDisplay = document.getElementById('codesim-otp-display');
-        if (!serviceSelect || !networkSelect || !phonePrefixInput || !getOtpButton || !cancelButton || !phoneDisplay || !otpDisplay) { console.error("[CodeSim] UI element missing!"); showStatus("Lỗi UI!", true); return; }
-        const serviceId = serviceSelect.value; const networkId = networkSelect.value; const prefix = phonePrefixInput.value.trim();
-        if (!serviceId) { showStatus("Vui lòng chọn dịch vụ.", true); return; }
-        getOtpButton.disabled = true; cancelButton.style.display = 'inline-block'; cancelButton.disabled = false;
+        if (isFetchingOtp) {
+            console.warn("[CodeSim] Already fetching OTP, click ignored.");
+            return;
+        }
+        if (currentOtpId) {
+            console.warn("[CodeSim] OTP request already active, click ignored. Cancel first.");
+             showStatus("Đang chờ OTP hoặc Hủy yêu cầu trước.", true);
+            return;
+        }
+
+        const serviceSelect = document.getElementById('codesim-service-select');
+        const networkSelect = document.getElementById('codesim-network-select');
+        const phonePrefixInput = document.getElementById('codesim-phone-prefix');
+        const getOtpButton = document.getElementById('codesim-get-otp');
+        const cancelButton = document.getElementById('codesim-cancel');
+        const phoneDisplay = document.getElementById('codesim-phone-display');
+        const otpDisplay = document.getElementById('codesim-otp-display');
+
+        if (!serviceSelect || !networkSelect || !phonePrefixInput || !getOtpButton || !cancelButton || !phoneDisplay || !otpDisplay) {
+            console.error("[CodeSim] UI element missing for Get OTP!");
+            showStatus("Lỗi UI!", true); return;
+        }
+
+        const serviceId = serviceSelect.value;
+        const networkId = networkSelect.value;
+        const prefix = phonePrefixInput.value.trim();
+
+        if (!serviceId) {
+            showStatus("Vui lòng chọn dịch vụ.", true); return;
+        }
+        if (!selectedAccountName || !currentApiKey) {
+            showStatus("Vui lòng chọn tài khoản hợp lệ.", true); return;
+        }
+
+        isFetchingOtp = true;
+        getOtpButton.disabled = true;
+        cancelButton.style.display = 'inline-block';
+        cancelButton.disabled = false;
         showStatus("Đang gửi yêu cầu lấy số...", false, true);
-        // *** UPDATED TEXT ***
+
         phoneDisplay.innerHTML = `Số điện thoại: <span>Đang lấy...</span>`;
         otpDisplay.innerHTML = `OTP: <span>---</span>`;
-        currentPhoneNumber = null; currentOtpCode = null;
-        const params = { service_id: serviceId, network_id: networkId || undefined, phone: prefix || undefined };
+        currentPhoneNumber = null;
+        currentOtpCode = null;
+
+        const params = {
+            service_id: serviceId,
+            network_id: networkId || undefined,
+            phone: prefix || undefined
+        };
+
         apiRequest('GET', '/sim/get_sim', params, (data) => {
-            if (!data || !data.otpId || !data.simId || !data.phone) { console.error("[CodeSim] Invalid data from /sim/get_sim:", data); showStatus("Lỗi: Dữ liệu SĐT không hợp lệ.", true); resetOtpState(false); return; }
-            currentOtpId = data.otpId; currentSimId = data.simId; currentPhoneNumber = data.phone; currentOtpCode = null;
+            isFetchingOtp = false;
+            if (!data || !data.otpId || !data.simId || !data.phone) {
+                console.error("[CodeSim] Invalid data from /sim/get_sim:", data);
+                showStatus("Lỗi: Dữ liệu SĐT không hợp lệ.", true);
+                resetOtpState(false);
+                return;
+            }
+
+            currentOtpId = data.otpId;
+            currentSimId = data.simId;
+            currentPhoneNumber = data.phone;
+            currentOtpCode = null;
+
             console.log(`[CodeSim] Số đã nhận: ${currentPhoneNumber} (OTP ID: ${currentOtpId}, SIM ID: ${currentSimId})`);
-            // *** UPDATED TEXT ***
+
             phoneDisplay.innerHTML = `Số điện thoại: <span>${currentPhoneNumber}</span>`;
             otpDisplay.innerHTML = `OTP: <span>Đang chờ...</span>`;
-            showStatus('Đang chờ mã OTP...', false, true); // Use specific loading state
-            copyToClipboard(currentPhoneNumber, "Đã tự động copy SĐT:");
-            clearTimeout(pollingTimeoutId); pollingTimeoutId = setTimeout(checkOtpStatus, POLLING_INTERVAL_PENDING);
+            showStatus('Đang chờ mã OTP...', false, true);
+
+            copyToClipboard(currentPhoneNumber, "Đã tự động copy SĐT:"); // Detailed notification
+
+            clearTimeout(pollingTimeoutId);
+            pollingTimeoutId = setTimeout(checkOtpStatus, POLLING_INTERVAL_PENDING);
+
             fetchBalanceForCurrentAccount();
+            checkAndEnableOtpButton(); // Button remains disabled due to currentOtpId
+
         }, (errorMsg) => {
+            isFetchingOtp = false;
             console.error(`[CodeSim] Lỗi lấy số: ${errorMsg}`);
             if (errorMsg && typeof errorMsg === 'string') {
-                if (errorMsg.includes("hủy phiên")) { showStatus(`Lỗi lấy số: ${errorMsg}. Thử hủy trên web Codesim.`, true); }
-                else if (errorMsg.includes("số dư")) { showStatus(`Lỗi lấy số: ${errorMsg}. Kiểm tra số dư.`, true); }
-                else { showStatus(`Lỗi lấy số: ${errorMsg}`, true); }
-            } else { showStatus('Lỗi không xác định khi lấy số.', true); }
-            resetOtpState(false);
+                if (errorMsg.includes("hủy phiên")) {
+                    showStatus(`Lỗi lấy số: ${errorMsg}. Thử hủy trên web Codesim.`, true);
+                } else if (errorMsg.includes("số dư")) {
+                    showStatus(`Lỗi lấy số: ${errorMsg}. Kiểm tra số dư.`, true);
+                } else {
+                    showStatus(`Lỗi lấy số: ${errorMsg}`, true);
+                }
+            } else {
+                showStatus('Lỗi không xác định khi lấy số.', true);
+            }
+            resetOtpState(false); // Reset UI, keeps selections, enables button
         });
     }
+
 
     /**
      * Periodically checks the status of the current OTP request.
      */
     function checkOtpStatus() {
-        if (!currentOtpId) { console.warn("[CodeSim] checkOtpStatus no OtpId."); resetOtpState(false); return; }
+        if (!currentOtpId) {
+            console.warn("[CodeSim] checkOtpStatus called without an active OtpId.");
+            resetOtpState(false);
+            return;
+        }
+
         console.log(`[CodeSim] Checking OTP status for ID: ${currentOtpId}`);
         const statusEl = document.getElementById('codesim-status');
-        if (statusEl && !statusEl.classList.contains('error') && !statusEl.classList.contains('success')) { showStatus('Đang chờ mã OTP...', false, true); }
-        const params = { otp_id: currentOtpId }; const otpDisplay = document.getElementById('codesim-otp-display');
+        if (statusEl && !statusEl.classList.contains('error') && !statusEl.classList.contains('success')) {
+            showStatus('Đang chờ mã OTP...', false, true);
+        }
+
+        const params = { otp_id: currentOtpId };
+        const otpDisplay = document.getElementById('codesim-otp-display');
+        const getOtpButton = document.getElementById('codesim-get-otp');
+        const cancelButton = document.getElementById('codesim-cancel');
+
         apiRequest('GET', '/otp/get_otp_by_phone_api_key', params, (data) => {
-            const otpCode = data ? data.code : null; const content = data ? data.content : null;
+            const otpCode = data ? data.code : null;
+            const content = data ? data.content : null;
+
             console.log(`[CodeSim] OTP Check Response: Code=${otpCode}, Content=${content}`);
+
             if (otpCode && typeof otpCode === 'string' && otpCode.trim() !== "" && otpCode !== "null") {
                 currentOtpCode = otpCode.trim();
                 console.log(`[CodeSim] OTP Received: ${currentOtpCode}. SMS: ${content}`);
-                if (otpDisplay) { otpDisplay.innerHTML = `OTP: <span>${currentOtpCode}</span>`; }
-                showStatus(`Đã nhận OTP!`, false);
-                copyToClipboard(currentOtpCode, "Đã tự động copy OTP:");
+
+                if (otpDisplay) {
+                    otpDisplay.innerHTML = `OTP: <span>${currentOtpCode}</span>`;
+                }
+                showStatus(`Đã nhận OTP! Sẵn sàng lấy số tiếp theo.`, false);
+                copyToClipboard(currentOtpCode, "Đã tự động copy OTP:"); // Detailed notification
+
                 clearTimeout(pollingTimeoutId); pollingTimeoutId = null;
-                const cancelButton = document.getElementById('codesim-cancel'); const getOtpButton = document.getElementById('codesim-get-otp');
-                if (cancelButton) cancelButton.style.display = 'none'; if (getOtpButton) getOtpButton.disabled = false;
-                checkAndEnableOtpButton();
+                currentOtpId = null; // Mark OTP request as complete
+                currentSimId = null;
+                isFetchingOtp = false;
+
+                if (cancelButton) cancelButton.style.display = 'none';
+
+                checkAndEnableOtpButton(); // Enable button as currentOtpId is now null
+
             } else {
                 console.log("[CodeSim] OTP not yet available. Polling again.");
-                showStatus('Đang chờ mã OTP...', false, true); // Ensure waiting status persists
-                clearTimeout(pollingTimeoutId); pollingTimeoutId = setTimeout(checkOtpStatus, POLLING_INTERVAL_PENDING);
+                showStatus('Đang chờ mã OTP...', false, true);
+                clearTimeout(pollingTimeoutId);
+                pollingTimeoutId = setTimeout(checkOtpStatus, POLLING_INTERVAL_PENDING);
             }
         }, (errorMsg) => {
             console.error(`[CodeSim] Lỗi kiểm tra OTP: ${errorMsg}`);
-            if (errorMsg && typeof errorMsg === 'string' && (errorMsg.includes("Hết hạn") || errorMsg.includes("hủy") || errorMsg.includes("timeout") || errorMsg.includes("không tồn tại"))) {
+            if (errorMsg && typeof errorMsg === 'string' &&
+                (errorMsg.includes("Hết hạn") || errorMsg.includes("hủy") || errorMsg.includes("timeout") || errorMsg.includes("không tồn tại"))) {
                 showStatus(`Lỗi OTP: ${errorMsg}. Yêu cầu đã kết thúc.`, true);
-                resetOtpState(false);
+                resetOtpState(false); // Reset state completely on fatal OTP error
             } else {
-                // On temporary error, show "Waiting..." status instead of error
                 console.warn(`[CodeSim] Lỗi tạm thời khi kiểm tra OTP (${errorMsg}). Sẽ thử lại.`);
-                showStatus('Đang chờ mã OTP...', false, true); // Revert to waiting status
+                showStatus('Đang chờ mã OTP... (Lỗi tạm thời)', false, true);
                 clearTimeout(pollingTimeoutId);
-                pollingTimeoutId = setTimeout(checkOtpStatus, POLLING_INTERVAL_PENDING); // Schedule next check
+                pollingTimeoutId = setTimeout(checkOtpStatus, POLLING_INTERVAL_PENDING);
             }
         });
     }
@@ -729,73 +954,133 @@
      * Handles the click event of the "Hủy Yêu Cầu" button.
      */
     function handleCancelClick() {
-        if (!currentSimId) { showStatus("Không có yêu cầu để hủy.", true); resetOtpState(false); return; }
-        console.log(`[CodeSim] Cancelling SIM ID: ${currentSimId}`);
+        if (!currentSimId && !currentOtpId) {
+            showStatus("Không có yêu cầu đang hoạt động để hủy.", true);
+            resetOtpState(false);
+            return;
+        }
+
+        const idToCancel = currentSimId || currentOtpId;
+        const endpoint = currentSimId ? `/sim/cancel_api_key/${currentSimId}` : `/otp/cancel_api_key/${currentOtpId}`;
+        const idType = currentSimId ? "SIM ID" : "OTP ID";
+
+        console.log(`[CodeSim] Attempting to cancel request with ${idType}: ${idToCancel}`);
         showStatus("Đang hủy yêu cầu...", false, true);
-        const cancelButton = document.getElementById('codesim-cancel'); if(cancelButton) cancelButton.disabled = true;
-        const endpoint = `/sim/cancel_api_key/${currentSimId}`; const params = {};
+        const cancelButton = document.getElementById('codesim-cancel');
+        if(cancelButton) cancelButton.disabled = true;
+
+        const params = {};
+
         apiRequest('GET', endpoint, params, (data) => {
-            showStatus("Yêu cầu hủy đã gửi.", false); console.log("[CodeSim] Cancellation successful.", data);
-            clearTimeout(pollingTimeoutId); resetOtpState(false); fetchBalanceForCurrentAccount();
+            showStatus("Yêu cầu đã được hủy thành công.", false);
+            console.log("[CodeSim] Cancellation successful response.", data);
+            clearTimeout(pollingTimeoutId); pollingTimeoutId = null;
+            resetOtpState(false); // Reset state, enable Get OTP button
+            fetchBalanceForCurrentAccount();
         }, (errorMsg) => {
-            showStatus(`Lỗi hủy: ${errorMsg}`, true); console.error(`[CodeSim] Lỗi hủy SIM ID ${currentSimId}: ${errorMsg}`);
-            if(cancelButton) cancelButton.disabled = false;
+            showStatus(`Lỗi hủy: ${errorMsg}. Thử reset trạng thái.`, true);
+            console.error(`[CodeSim] Lỗi hủy ${idType} ${idToCancel}: ${errorMsg}`);
+            clearTimeout(pollingTimeoutId); pollingTimeoutId = null;
+            resetOtpState(false); // Reset state anyway
+            if(cancelButton) cancelButton.disabled = false; // Re-enable maybe? resetOtpState should handle it
         });
     }
+
 
     // --- UI State Management ---
 
     /**
      * Resets the state related to an ongoing OTP request.
+     * Enables the "Lấy số mới" button unless a full UI reset is needed.
      * @param {boolean} resetAccountRelatedUI If true, also clears service/network dropdowns etc.
      */
     function resetOtpState(resetAccountRelatedUI = false) {
-        console.log(`[CodeSim] Reset OTP state. Full UI Reset: ${resetAccountRelatedUI}`);
+        console.log(`[CodeSim] Resetting state. Full UI Reset: ${resetAccountRelatedUI}`);
+
         clearTimeout(pollingTimeoutId); pollingTimeoutId = null;
-        currentOtpId = null; currentSimId = null; currentPhoneNumber = null; currentOtpCode = null;
-        const getOtpButton = document.getElementById('codesim-get-otp'); const cancelButton = document.getElementById('codesim-cancel');
-        const phonePrefixInput = document.getElementById('codesim-phone-prefix'); const statusDisplay = document.getElementById('codesim-status');
-        const phoneDisplay = document.getElementById('codesim-phone-display'); const otpDisplay = document.getElementById('codesim-otp-display');
-        if (getOtpButton) getOtpButton.disabled = false;
-        if (cancelButton) { cancelButton.style.display = 'none'; cancelButton.disabled = false; }
-        if (phonePrefixInput) phonePrefixInput.value = '';
-        if (statusDisplay && !statusDisplay.classList.contains('error')) { /* Optionally clear */ }
-        // *** UPDATED TEXT ***
-        if (phoneDisplay) phoneDisplay.innerHTML = `Số điện thoại: <span>Đang chờ yêu cầu</span>`;
-        if (otpDisplay) otpDisplay.innerHTML = `OTP: <span>Đang chờ yêu cầu</span>`;
+        currentOtpId = null;
+        currentSimId = null;
+        isFetchingOtp = false;
+
+        if (!resetAccountRelatedUI) {
+            currentPhoneNumber = null;
+            currentOtpCode = null;
+            const phoneDisplay = document.getElementById('codesim-phone-display');
+            const otpDisplay = document.getElementById('codesim-otp-display');
+            if (phoneDisplay) phoneDisplay.innerHTML = `Số điện thoại: <span>Đang chờ yêu cầu</span>`;
+            if (otpDisplay) otpDisplay.innerHTML = `OTP: <span>Đang chờ yêu cầu</span>`;
+        }
+
+        const getOtpButton = document.getElementById('codesim-get-otp');
+        const cancelButton = document.getElementById('codesim-cancel');
+        // const phonePrefixInput = document.getElementById('codesim-phone-prefix'); // Keep prefix
+        const statusDisplay = document.getElementById('codesim-status');
+
+        if (cancelButton) {
+            cancelButton.style.display = 'none';
+            cancelButton.disabled = false;
+        }
+
+        // Clear non-error/loading status messages if not doing full reset
+        if (statusDisplay && !resetAccountRelatedUI && !statusDisplay.classList.contains('error') && !statusDisplay.classList.contains('loading') && !statusDisplay.classList.contains('loading-otp')) {
+             statusDisplay.textContent = ''; // Clear transient success messages like 'cancelled'
+             statusDisplay.className = 'status-message';
+        } else if (resetAccountRelatedUI && statusDisplay) {
+            // Clear status completely on full reset
+             statusDisplay.textContent = '';
+             statusDisplay.className = 'status-message';
+        }
+
+
         if (resetAccountRelatedUI) {
-            const serviceSelect = document.getElementById('codesim-service-select'); const networkSelect = document.getElementById('codesim-network-select');
+            const serviceSelect = document.getElementById('codesim-service-select');
+            const networkSelect = document.getElementById('codesim-network-select');
             if (serviceSelect) serviceSelect.innerHTML = '<option value="">-- Chọn tài khoản --</option>';
             if (networkSelect) networkSelect.innerHTML = '<option value="">-- Chọn tài khoản --</option>';
             if (getOtpButton) getOtpButton.disabled = true;
         } else {
-            checkAndEnableOtpButton();
+            checkAndEnableOtpButton(); // Re-evaluate button state
         }
     }
 
     /**
      * Checks conditions and enables/disables the "Lấy số mới" button.
+     * Button is enabled if account and service are selected AND no OTP request is active AND not currently fetching.
      */
     function checkAndEnableOtpButton() {
-        const getOtpButton = document.getElementById('codesim-get-otp'); const serviceSelect = document.getElementById('codesim-service-select');
+        const getOtpButton = document.getElementById('codesim-get-otp');
+        const serviceSelect = document.getElementById('codesim-service-select');
+
         if (getOtpButton && serviceSelect) {
-            const isAccountSelected = !!selectedAccountName; const isServiceSelected = !!serviceSelect.value; const isOtpActive = !!currentOtpId;
-            getOtpButton.disabled = !(isAccountSelected && isServiceSelected && !isOtpActive);
-        } else if (getOtpButton) { getOtpButton.disabled = true; }
+            const isAccountSelected = !!selectedAccountName;
+            const isServiceSelected = !!serviceSelect.value;
+            const shouldBeEnabled = isAccountSelected && isServiceSelected && !currentOtpId && !isFetchingOtp;
+            getOtpButton.disabled = !shouldBeEnabled;
+            // console.log(`[CodeSim] Button State Check: Account=${isAccountSelected}, Service=${isServiceSelected}, OtpActive=${!!currentOtpId}, Fetching=${isFetchingOtp} => Enabled=${shouldBeEnabled}`);
+        } else if (getOtpButton) {
+            getOtpButton.disabled = true;
+        }
     }
 
     /**
      * Fetches the balance specifically for the currently selected account.
      */
     function fetchBalanceForCurrentAccount() {
-        if (!selectedAccountName || !currentApiKey) { console.warn("[CodeSim] fetchBalanceForCurrentAccount no account."); return; }
-        console.log(`[CodeSim] Refreshing balance: ${selectedAccountName}`);
+        if (!selectedAccountName || !currentApiKey) {
+            console.warn("[CodeSim] fetchBalanceForCurrentAccount called without selected account.");
+            return;
+        }
+        console.log(`[CodeSim] Refreshing balance for: ${selectedAccountName}`);
         apiRequest('GET', '/yourself/information-by-api-key', {}, (data) => {
-            const newBalance = data.balance; accountBalances[selectedAccountName] = newBalance;
-            updateMainBalanceDisplay(); updateAccountDropdownBalance(selectedAccountName, newBalance);
+            const newBalance = data.balance;
+            accountBalances[selectedAccountName] = newBalance;
+            updateMainBalanceDisplay();
+            updateAccountDropdownBalance(selectedAccountName, newBalance);
         }, (errorMsg) => {
-            console.error(`[CodeSim] Lỗi refresh balance: ${errorMsg}`); accountBalances[selectedAccountName] = null;
-            updateMainBalanceDisplay(); updateAccountDropdownBalance(selectedAccountName, null, errorMsg);
+            console.error(`[CodeSim] Lỗi refresh balance for ${selectedAccountName}: ${errorMsg}`);
+            accountBalances[selectedAccountName] = null;
+            updateMainBalanceDisplay();
+            updateAccountDropdownBalance(selectedAccountName, null, errorMsg);
         });
     }
 
@@ -806,22 +1091,33 @@
      * @param {string|null} error Optional error message if balance is null.
      */
     function updateAccountDropdownBalance(accountName, balance, error = null) {
-        const accountSelect = document.getElementById('codesim-account-select'); if (!accountSelect) return;
+        const accountSelect = document.getElementById('codesim-account-select');
+        if (!accountSelect) return;
         const option = accountSelect.querySelector(`option[value="${accountName}"]`);
         if (option) {
             let displayText = accountName;
-            if (balance !== null) { displayText += ` (${balance.toLocaleString('vi-VN')}đ)`; }
-            else { displayText += ` (Lỗi: ${error || 'N/A'})`; } // Keep N/A for balance error
+            if (balance !== null) {
+                displayText += ` (${balance.toLocaleString('vi-VN')}đ)`;
+            } else {
+                displayText += ` (Lỗi: ${error || 'N/A'})`;
+            }
             option.textContent = displayText;
         }
     }
 
     // --- Initialization ---
     function initializeScript() {
-        console.log("[CodeSim] Initializing Script v2.8.2...");
-        if (document.body) { console.log("[CodeSim] Body ready, creating UI."); createUI(); }
-        else { console.log("[CodeSim] Body not ready, waiting DOMContentLoaded."); window.addEventListener('DOMContentLoaded', createUI); }
+        console.log("[CodeSim] Initializing Script v2.9.1...");
+        if (document.readyState === 'loading') { // Handle cases where script runs before DOMContentLoaded
+             console.log("[CodeSim] Document loading, waiting for DOMContentLoaded.");
+             window.addEventListener('DOMContentLoaded', createUI);
+        } else { // DOM is already ready
+             console.log("[CodeSim] DOM ready, creating UI.");
+             createUI();
+        }
     }
+
+    // Start the script
     initializeScript();
 
 })();
