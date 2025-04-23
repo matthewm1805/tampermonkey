@@ -888,7 +888,7 @@
                 resetOtpState(false); // Reset other UI elements (cancel button), enable Get OTP btn
             } else {
                 // Temporary error, keep polling but maybe indicate issue?
-                updateOtpDisplayStatus("Đang chờ OTP (lỗi tạm thời)");
+                updateOtpDisplayStatus("Đang chờ OTP...");
                 clearTimeout(pollingTimeoutId);
                 pollingTimeoutId = setTimeout(checkOtpStatus, POLLING_INTERVAL_PENDING);
             }
