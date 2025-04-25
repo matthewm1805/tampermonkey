@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Auto ChatGPT
 // @namespace    http://tampermonkey.net/
-// @version      1.2
-// @description  Auto ChatGPT
+// @version      1.3
+// @description  Auto ChatGPT with Import/Export Template
 // @author       Matthew M.
 // @match        https://chatgpt.com/*
 // @grant        GM_addStyle
@@ -26,9 +26,10 @@
     let initialPanelX = 0; let initialPanelY = 0;
     let currentPanelX = 0; let currentPanelY = 0;
     let rafPending = false;
+    let fileInput = null; // Added for import
 
-    // --- CONSTANTS (No changes needed here except version) ---
-    const SCRIPT_VERSION = "1.2"; // Updated version for animation changes
+    // --- CONSTANTS (Update version) ---
+    const SCRIPT_VERSION = "1.3"; // Updated version for import/export feature
     const PROMPT_TEXTAREA_SELECTOR = '#prompt-textarea';
     const SEND_BUTTON_SELECTOR = 'button#composer-submit-button, button[data-testid="send-button"]';
     const STOP_GENERATING_BUTTON_SELECTOR = 'button[data-testid="stop-button"]';
@@ -54,6 +55,9 @@
     const PLUS_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="11" height="11"><path d="M11 11V5H13V11H19V13H13V19H11V13H5V11H11Z"></path></svg>`;
     const MINIMIZE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="12" height="12"><path d="M5 11V13H19V11H5Z"></path></svg>`;
     const DOWNLOAD_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="12" height="12"><path d="M13 10H18L12 16L6 10H11V3H13V10ZM4 18V20H20V18H4Z"></path></svg>`;
+    // New SVGs for Import/Export
+    const EXPORT_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="11" height="11"><path d="M4 19H20V12H22V20C22 20.5523 21.5523 21 21 21H3C2.44772 21 2 20.5523 2 20V12H4V19ZM12 16L18 10H13V3H11V10H6L12 16Z"></path></svg>`;
+    const IMPORT_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="11" height="11"><path d="M4 19H20V12H22V20C22 20.5523 21.5523 21 21 21H3C2.44772 21 2 20.5523 2 20V12H4V19ZM13 9H18L12 3L6 9H11V16H13V9Z"></path></svg>`;
     const PLAY_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="12" height="12"><path d="M8 5V19L19 12L8 5Z"></path></svg>`;
     const STOP_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="11" height="11"><path d="M6 6H18V18H6V6Z"></path></svg>`;
     const UP_ARROW_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="11" height="11"><path d="M12 8L18 14H6L12 8Z"></path></svg>`;
@@ -62,12 +66,125 @@
     // --- UTILITY FUNCTIONS (No changes needed here) ---
     function delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
     function generateUniqueId() { return Date.now().toString(36) + Math.random().toString(36).substring(2); }
-    async function waitForElementToBeEnabled(element, timeout = 5000) { /* ... no change ... */ return new Promise((resolve, reject) => { const checkInterval = 200; let timeElapsed = 0; if (!element || !document.body.contains(element)) return reject(new Error(`Element not found or removed from DOM before waiting.`)); if (!element.disabled) return resolve(); const intervalId = setInterval(() => { if (!element || !document.body.contains(element)) { clearInterval(intervalId); return reject(new Error(`Element no longer in DOM while waiting.`)); } if (!element.disabled) { clearInterval(intervalId); resolve(); } else { timeElapsed += checkInterval; if (timeElapsed >= timeout) { clearInterval(intervalId); console.warn(`Element did not become enabled within ${timeout}ms.`); resolve(); } } }, checkInterval); }); }
-    function getCurrentTimeString() { /* ... no change ... */ const now = new Date(); const hours = String(now.getHours()).padStart(2, '0'); const minutes = String(now.getMinutes()).padStart(2, '0'); const seconds = String(now.getSeconds()).padStart(2, '0'); return `${hours}:${minutes}:${seconds}`; }
+    async function waitForElementToBeEnabled(element, timeout = 5000) { return new Promise((resolve, reject) => { const checkInterval = 200; let timeElapsed = 0; if (!element || !document.body.contains(element)) return reject(new Error(`Element not found or removed from DOM before waiting.`)); if (!element.disabled) return resolve(); const intervalId = setInterval(() => { if (!element || !document.body.contains(element)) { clearInterval(intervalId); return reject(new Error(`Element no longer in DOM while waiting.`)); } if (!element.disabled) { clearInterval(intervalId); resolve(); } else { timeElapsed += checkInterval; if (timeElapsed >= timeout) { clearInterval(intervalId); console.warn(`Element did not become enabled within ${timeout}ms.`); resolve(); } } }, checkInterval); }); }
+    function getCurrentTimeString() { const now = new Date(); const hours = String(now.getHours()).padStart(2, '0'); const minutes = String(now.getMinutes()).padStart(2, '0'); const seconds = String(now.getSeconds()).padStart(2, '0'); return `${hours}:${minutes}:${seconds}`; }
+    function getCurrentTimestampForFilename() { const now = new Date(); const year = now.getFullYear(); const month = String(now.getMonth() + 1).padStart(2, '0'); const day = String(now.getDate()).padStart(2, '0'); const hours = String(now.getHours()).padStart(2, '0'); const minutes = String(now.getMinutes()).padStart(2, '0'); const seconds = String(now.getSeconds()).padStart(2, '0'); return `${year}${month}${day}_${hours}${minutes}${seconds}`; }
 
-    // --- UI & DATA FUNCTIONS (No changes needed in core logic) ---
-    function updatePromptNumbers() { /* ... no change ... */ const container = document.getElementById(CONTAINER_ID); if (!container) return; const wrappers = container.querySelectorAll(`:scope > .${ITEM_WRAPPER_CLASS}`); wrappers.forEach((wrapper, index) => { const numberSpan = wrapper.querySelector(`.${PROMPT_NUMBER_CLASS}`); if (numberSpan) { numberSpan.textContent = `${index + 1}`; } }); }
-    function createUI() { /* ... no change ... */ if (document.getElementById(MAIN_PANEL_ID)) return; isMinimized = GM_getValue(MINIMIZED_STATE_KEY, false); const controlPanel = document.createElement('div'); controlPanel.id = MAIN_PANEL_ID; controlPanel.className = isMinimized ? 'minimized' : ''; controlPanel.innerHTML = ` <div id="panel-header" title="Kéo để di chuyển"> <img src="https://www.svgrepo.com/show/306500/openai.svg" class="openai-logo" alt="OpenAI Logo"> <span class="header-title">Auto ChatGPT</span> <span class="header-version">build ${SCRIPT_VERSION}</span> <button id="minimize-btn" class="panel-header-button" title="Thu nhỏ / Mở rộng">${MINIMIZE_SVG}</button> </div> <div id="auto-chat-section"> <div class="section-header"> <span>Tự động trò chuyện</span> </div> <div id="auto-chat-content"> <div id="${CONTAINER_ID}"> <div id="dialogue-empty-state" style="display: none;"> <p>Chưa có câu thoại nào. Hãy thêm một câu!</p> <button id="add-prompt-empty-btn" class="add-prompt-main-btn"> ${PLUS_SVG} Thêm câu thoại </button> </div> </div> <div id="dialogue-add-footer"> <button id="add-prompt-footer-btn" class="add-prompt-main-btn"> ${PLUS_SVG} Thêm câu thoại </button> </div> <div class="section-content-divider"></div> <div id="automation-settings"> <label class="wait-label">Thời gian chờ từ</label> <input type="number" id="min-wait-input" min="0" step="0.1" title="Giây tối thiểu"> <label class="wait-label">(s) đến</label> <input type="number" id="max-wait-input" min="0" step="0.1" title="Giây tối đa"> <label class="wait-label">(s)</label> </div> <div class="controls-footer"> <button id="start-automation-btn" title="Bắt đầu gửi tự động"> ${PLAY_SVG} <span>Bắt đầu</span> </button> <button id="stop-automation-btn" style="display: none;" title="Dừng gửi tự động"> ${STOP_SVG} <span>Dừng</span> </button> </div> <div id="automation-status">Chờ</div> </div> </div> <div class="panel-section-divider thick"></div> <div id="download-section"> <label for="codeblock-id-input" title="Nhập ID bạn đặt trong dấu ngoặc đơn ở đầu code block, vd: python(id_cua_ban)">ID Code Block:</label> <input type="text" id="codeblock-id-input" placeholder="Điền block code..."> <button id="download-codeblock-btn" title="Tải nội dung code block khớp ID"> ${DOWNLOAD_SVG} <span>Tải về</span> </button> </div> `; document.body.appendChild(controlPanel); const minimizeDot = document.createElement('div'); minimizeDot.id = MINIMIZE_DOT_ID; minimizeDot.title = 'Mở Auto ChatGPT'; minimizeDot.style.display = isMinimized ? 'flex' : 'none'; document.body.appendChild(minimizeDot); updateEmptyStateVisibility(); document.getElementById('panel-header').addEventListener('mousedown', handlePanelDragStart); document.addEventListener('mousemove', handlePanelDragMove); document.addEventListener('mouseup', handlePanelDragEnd); document.addEventListener('mouseleave', handlePanelDragEnd); document.getElementById('minimize-btn').addEventListener('click', toggleMinimize); minimizeDot.addEventListener('click', toggleMinimize); document.getElementById('min-wait-input').addEventListener('input', saveWaitTimes); document.getElementById('max-wait-input').addEventListener('input', saveWaitTimes); document.getElementById('start-automation-btn').addEventListener('click', startAutomation); document.getElementById('stop-automation-btn').addEventListener('click', stopAutomation); document.getElementById('download-codeblock-btn').addEventListener('click', downloadCodeblockData); document.getElementById('add-prompt-footer-btn').addEventListener('click', () => addDialogueInput()); document.getElementById('add-prompt-empty-btn').addEventListener('click', () => addDialogueInput()); loadDialogues(); loadWaitTimes(); }
+    // --- UI & DATA FUNCTIONS (Minor changes in createUI, add disableDialogueEditing) ---
+    function updatePromptNumbers() { const container = document.getElementById(CONTAINER_ID); if (!container) return; const wrappers = container.querySelectorAll(`:scope > .${ITEM_WRAPPER_CLASS}`); wrappers.forEach((wrapper, index) => { const numberSpan = wrapper.querySelector(`.${PROMPT_NUMBER_CLASS}`); if (numberSpan) { numberSpan.textContent = `${index + 1}`; } }); }
+
+    function createUI() {
+        if (document.getElementById(MAIN_PANEL_ID)) return;
+        isMinimized = GM_getValue(MINIMIZED_STATE_KEY, false);
+
+        // Create hidden file input for import
+        fileInput = document.createElement('input');
+        fileInput.type = 'file';
+        fileInput.accept = '.json';
+        fileInput.style.display = 'none';
+        fileInput.addEventListener('change', handleFileImport);
+        document.body.appendChild(fileInput); // Needs to be in DOM to function
+
+        const controlPanel = document.createElement('div');
+        controlPanel.id = MAIN_PANEL_ID;
+        controlPanel.className = isMinimized ? 'minimized' : '';
+        // Updated HTML structure to include Import/Export buttons
+        controlPanel.innerHTML = `
+            <div id="panel-header" title="Kéo để di chuyển">
+                <img src="https://www.svgrepo.com/show/306500/openai.svg" class="openai-logo" alt="OpenAI Logo">
+                <span class="header-title">Auto ChatGPT</span>
+                <span class="header-version">build ${SCRIPT_VERSION}</span>
+                <button id="minimize-btn" class="panel-header-button" title="Thu nhỏ / Mở rộng">${MINIMIZE_SVG}</button>
+            </div>
+            <div id="auto-chat-section">
+                <div class="section-header">
+                    <span>Tự động trò chuyện</span>
+                </div>
+                <div id="auto-chat-content">
+                    <div id="${CONTAINER_ID}">
+                        <div id="dialogue-empty-state" style="display: none;">
+                            <p>Chưa có câu thoại nào. Hãy thêm một câu!</p>
+                            <button id="add-prompt-empty-btn" class="add-prompt-main-btn">
+                                ${PLUS_SVG} Thêm câu thoại
+                            </button>
+                        </div>
+                    </div>
+                    <div id="dialogue-add-footer">
+                        <button id="add-prompt-footer-btn" class="add-prompt-main-btn">
+                            ${PLUS_SVG} Thêm câu thoại
+                        </button>
+                    </div>
+                    <!-- START: Import/Export Buttons Section -->
+                    <div id="template-actions-footer" class="template-actions-container">
+                         <button id="import-template-btn" class="template-action-btn" title="Nhập template từ file JSON">
+                            ${IMPORT_SVG} Nhập Template
+                         </button>
+                         <button id="export-template-btn" class="template-action-btn" title="Xuất template hiện tại ra file JSON">
+                            ${EXPORT_SVG} Xuất Template
+                         </button>
+                    </div>
+                    <!-- END: Import/Export Buttons Section -->
+                    <div class="section-content-divider"></div>
+                    <div id="automation-settings">
+                        <label class="wait-label">Thời gian chờ từ</label>
+                        <input type="number" id="min-wait-input" min="0" step="0.1" title="Giây tối thiểu">
+                        <label class="wait-label">(s) đến</label>
+                        <input type="number" id="max-wait-input" min="0" step="0.1" title="Giây tối đa">
+                        <label class="wait-label">(s)</label>
+                    </div>
+                    <div class="controls-footer">
+                        <button id="start-automation-btn" title="Bắt đầu gửi tự động">
+                            ${PLAY_SVG} <span>Bắt đầu</span>
+                        </button>
+                        <button id="stop-automation-btn" style="display: none;" title="Dừng gửi tự động">
+                            ${STOP_SVG} <span>Dừng</span>
+                        </button>
+                    </div>
+                    <div id="automation-status">Chờ</div>
+                </div>
+            </div>
+            <div class="panel-section-divider thick"></div>
+            <div id="download-section">
+                <label for="codeblock-id-input" title="Nhập ID bạn đặt trong dấu ngoặc đơn ở đầu code block, vd: python(id_cua_ban)">ID Code Block:</label>
+                <input type="text" id="codeblock-id-input" placeholder="Điền block code...">
+                <button id="download-codeblock-btn" title="Tải nội dung code block khớp ID">
+                    ${DOWNLOAD_SVG} <span>Tải về</span>
+                </button>
+            </div>
+        `;
+        document.body.appendChild(controlPanel);
+
+        const minimizeDot = document.createElement('div');
+        minimizeDot.id = MINIMIZE_DOT_ID;
+        minimizeDot.title = 'Mở Auto ChatGPT';
+        minimizeDot.style.display = isMinimized ? 'flex' : 'none';
+        document.body.appendChild(minimizeDot);
+
+        updateEmptyStateVisibility();
+
+        // --- Attach Event Listeners ---
+        document.getElementById('panel-header').addEventListener('mousedown', handlePanelDragStart);
+        document.addEventListener('mousemove', handlePanelDragMove);
+        document.addEventListener('mouseup', handlePanelDragEnd);
+        document.addEventListener('mouseleave', handlePanelDragEnd); // Handle mouse leaving window
+        document.getElementById('minimize-btn').addEventListener('click', toggleMinimize);
+        minimizeDot.addEventListener('click', toggleMinimize);
+        document.getElementById('min-wait-input').addEventListener('input', saveWaitTimes);
+        document.getElementById('max-wait-input').addEventListener('input', saveWaitTimes);
+        document.getElementById('start-automation-btn').addEventListener('click', startAutomation);
+        document.getElementById('stop-automation-btn').addEventListener('click', () => stopAutomation());
+        document.getElementById('download-codeblock-btn').addEventListener('click', downloadCodeblockData);
+        document.getElementById('add-prompt-footer-btn').addEventListener('click', () => addDialogueInput());
+        document.getElementById('add-prompt-empty-btn').addEventListener('click', () => addDialogueInput());
+
+        // --- Add Import/Export Listeners ---
+        document.getElementById('import-template-btn').addEventListener('click', triggerImport);
+        document.getElementById('export-template-btn').addEventListener('click', exportTemplate);
+
+        loadDialogues();
+        loadWaitTimes();
+    }
+
     function toggleMinimize() { /* ... no change ... */ const panel = document.getElementById(MAIN_PANEL_ID); const dot = document.getElementById(MINIMIZE_DOT_ID); if (!panel || !dot) return; isMinimized = !isMinimized; if (isMinimized) { panel.classList.add('minimizing'); dot.style.display = 'flex'; setTimeout(() => { if(isMinimized) panel.classList.add('minimized'); }, ANIMATION_DURATION_MS); } else { panel.classList.remove('minimized'); panel.classList.remove('minimizing'); dot.style.display = 'none'; } GM_setValue(MINIMIZED_STATE_KEY, isMinimized); }
     function autoResizeTextarea(textarea) { /* ... no change ... */ if (!textarea) return; textarea.style.height = 'auto'; textarea.style.height = (textarea.scrollHeight + 2) + 'px'; }
     function updateDialogueDataArray() { /* ... no change ... */ const container = document.getElementById(CONTAINER_ID); if (!container) { dialogueData = []; return; } dialogueData = Array.from(container.querySelectorAll(`:scope > .${ITEM_WRAPPER_CLASS}`)) .map(wrapper => { const textarea = wrapper.querySelector('.dialogue-textarea'); const repeatInput = wrapper.querySelector('.repeat-input'); const promptId = wrapper.getAttribute('data-id'); const repeatValue = parseInt(repeatInput?.value || '1', 10); return { id: promptId, text: textarea?.value || '', repeat: repeatValue > 0 ? repeatValue : 1 }; }) .filter(item => item.id); }
@@ -76,62 +193,8 @@
     function handleMoveUp(e) { /* ... no change ... */ const currentWrapper = e.currentTarget.closest(`.${ITEM_WRAPPER_CLASS}`); if (!currentWrapper || isAutomating) return; const previousWrapper = currentWrapper.previousElementSibling; if (previousWrapper && previousWrapper.classList.contains(ITEM_WRAPPER_CLASS)) { animateSwap(currentWrapper, previousWrapper, 'up'); } }
     function handleMoveDown(e) { /* ... no change ... */ const currentWrapper = e.currentTarget.closest(`.${ITEM_WRAPPER_CLASS}`); if (!currentWrapper || isAutomating) return; const nextWrapper = currentWrapper.nextElementSibling; if (nextWrapper && nextWrapper.classList.contains(ITEM_WRAPPER_CLASS)) { animateSwap(currentWrapper, nextWrapper, 'down'); } }
 
-    // --- ANIMATION FUNCTION (Only change transition style) ---
-    function animateSwap(elementToMove, swapTargetElement, direction) {
-        const container = elementToMove.parentElement;
-        if (!container || !swapTargetElement || !swapTargetElement.classList.contains(ITEM_WRAPPER_CLASS)) {
-             console.warn("animateSwap: Invalid elements or target.", {elementToMove, swapTargetElement, direction});
-             return;
-        }
-
-        disableAllMoveButtons(true);
-
-        const rectMove = elementToMove.getBoundingClientRect();
-        const rectTarget = swapTargetElement.getBoundingClientRect();
-        const margin = parseFloat(window.getComputedStyle(elementToMove).marginBottom) || 0;
-
-        const distanceMove = rectTarget.top - rectMove.top;
-        const distanceTarget = (direction === 'up')
-            ? (rectMove.bottom + margin) - (rectTarget.bottom + margin)
-            : (rectMove.top) - (rectTarget.top);
-
-        elementToMove.style.transition = 'none';
-        swapTargetElement.style.transition = 'none';
-        elementToMove.style.transform = `translateY(${distanceMove}px)`;
-        swapTargetElement.style.transform = `translateY(${distanceTarget}px)`;
-
-        elementToMove.offsetWidth;
-
-        if (direction === 'up') {
-            container.insertBefore(elementToMove, swapTargetElement);
-        } else {
-            container.insertBefore(elementToMove, swapTargetElement.nextElementSibling);
-        }
-
-        requestAnimationFrame(() => {
-            // *** ANIMATION CHANGE: Use a smoother cubic-bezier easing function ***
-            const easingFunction = 'cubic-bezier(0.4, 0, 0.2, 1)'; // Material Design standard curve
-            elementToMove.style.transition = `transform ${ANIMATION_DURATION_MS}ms ${easingFunction}`;
-            swapTargetElement.style.transition = `transform ${ANIMATION_DURATION_MS}ms ${easingFunction}`;
-            // *** END ANIMATION CHANGE ***
-
-            elementToMove.style.transform = '';
-            swapTargetElement.style.transform = '';
-        });
-
-        setTimeout(() => {
-            elementToMove.style.transition = '';
-            swapTargetElement.style.transition = '';
-            elementToMove.style.transform = '';
-            swapTargetElement.style.transform = '';
-
-            updateDialogueDataArray();
-            saveDialogues();
-            updateMoveButtonStates();
-            disableAllMoveButtons(false);
-            updatePromptNumbers();
-        }, ANIMATION_DURATION_MS + 10);
-    }
+    // --- ANIMATION FUNCTION (No change) ---
+    function animateSwap(elementToMove, swapTargetElement, direction) { /* ... no change ... */ const container = elementToMove.parentElement; if (!container || !swapTargetElement || !swapTargetElement.classList.contains(ITEM_WRAPPER_CLASS)) { console.warn("animateSwap: Invalid elements or target.", {elementToMove, swapTargetElement, direction}); return; } disableAllMoveButtons(true); const rectMove = elementToMove.getBoundingClientRect(); const rectTarget = swapTargetElement.getBoundingClientRect(); const margin = parseFloat(window.getComputedStyle(elementToMove).marginBottom) || 0; const distanceMove = rectTarget.top - rectMove.top; const distanceTarget = (direction === 'up') ? (rectMove.bottom + margin) - (rectTarget.bottom + margin) : (rectMove.top) - (rectTarget.top); elementToMove.style.transition = 'none'; swapTargetElement.style.transition = 'none'; elementToMove.style.transform = `translateY(${distanceMove}px)`; swapTargetElement.style.transform = `translateY(${distanceTarget}px)`; elementToMove.offsetWidth; if (direction === 'up') { container.insertBefore(elementToMove, swapTargetElement); } else { container.insertBefore(elementToMove, swapTargetElement.nextElementSibling); } requestAnimationFrame(() => { const easingFunction = 'cubic-bezier(0.4, 0, 0.2, 1)'; elementToMove.style.transition = `transform ${ANIMATION_DURATION_MS}ms ${easingFunction}`; swapTargetElement.style.transition = `transform ${ANIMATION_DURATION_MS}ms ${easingFunction}`; elementToMove.style.transform = ''; swapTargetElement.style.transform = ''; }); setTimeout(() => { elementToMove.style.transition = ''; swapTargetElement.style.transition = ''; elementToMove.style.transform = ''; swapTargetElement.style.transform = ''; updateDialogueDataArray(); saveDialogues(); updateMoveButtonStates(); disableAllMoveButtons(false); updatePromptNumbers(); }, ANIMATION_DURATION_MS + 10); }
 
     // --- MORE UI & DATA FUNCTIONS (No changes needed in logic) ---
     function updateMoveButtonStates() { /* ... no change ... */ const container = document.getElementById(CONTAINER_ID); if (!container) return; const wrappers = container.querySelectorAll(`:scope > .${ITEM_WRAPPER_CLASS}`); wrappers.forEach((wrapper, index) => { const moveUpBtn = wrapper.querySelector('.move-up-btn'); const moveDownBtn = wrapper.querySelector('.move-down-btn'); if (moveUpBtn) moveUpBtn.disabled = (index === 0); if (moveDownBtn) moveDownBtn.disabled = (index === wrappers.length - 1); }); }
@@ -147,7 +210,57 @@
     function updateStatus(message) { /* ... no change ... */ const statusDiv = document.getElementById('automation-status'); if (statusDiv) { statusDiv.textContent = `${message}`; } console.log(`Automation Status: ${message}`); }
     async function startAutomation() { /* ... no change ... */ updateDialogueDataArray(); const validPromptsData = dialogueData.filter(data => data?.text?.trim()); if (isAutomating) { updateStatus("Đang chạy..."); return; } if (validPromptsData.length === 0) { updateStatus("Không có câu thoại hợp lệ để gửi."); return; } document.querySelectorAll(`.${ITEM_WRAPPER_CLASS} .${PROMPT_NUMBER_CLASS}`).forEach(span => { span.style.display = 'none'; }); isAutomating = true; stopRequested = false; currentPromptIndex = 0; currentRepeatCount = 0; const startBtn = document.getElementById('start-automation-btn'); const stopBtn = document.getElementById('stop-automation-btn'); if (startBtn) startBtn.style.display = 'none'; if (stopBtn) stopBtn.style.display = 'flex'; disableDialogueEditing(true); disableWaitTimeEditing(true); disableDownloadFeature(true); updateStatus("Đang bắt đầu..."); await delay(500); setActivePromptHighlight(-1); processNextPrompt(); }
     function stopAutomation(completedSuccessfully = false) { /* ... no change ... */ isAutomating = false; if (!completedSuccessfully) { stopRequested = true; } const startBtn = document.getElementById('start-automation-btn'); const stopBtn = document.getElementById('stop-automation-btn'); if (startBtn) startBtn.style.display = 'flex'; if (stopBtn) stopBtn.style.display = 'none'; disableDialogueEditing(false); disableWaitTimeEditing(false); disableDownloadFeature(false); if (completedSuccessfully) { const timeString = getCurrentTimeString(); updateStatus(`Hoàn thành tất cả câu thoại lúc ${timeString}`); } else if (stopRequested) { updateStatus("Đã dừng bởi người dùng."); } updatePromptNumbers(); document.querySelectorAll(`.${ITEM_WRAPPER_CLASS} .${PROMPT_NUMBER_CLASS}`).forEach(span => { span.style.display = 'block'; }); setActivePromptHighlight(-1); }
-    function disableDialogueEditing(disabled) { /* ... no change ... */ const container = document.getElementById(CONTAINER_ID); if (!container) return; container.querySelectorAll(`.${ITEM_WRAPPER_CLASS} .dialogue-textarea, .${ITEM_WRAPPER_CLASS} .repeat-input, .${ITEM_WRAPPER_CLASS} .remove-prompt-btn, .${ITEM_WRAPPER_CLASS} .add-prompt-btn, .${ITEM_WRAPPER_CLASS} .move-up-btn, .${ITEM_WRAPPER_CLASS} .move-down-btn`) .forEach(el => { el.disabled = disabled; el.style.cursor = disabled ? 'not-allowed' : ''; el.style.opacity = disabled ? '0.5' : '1'; }); const addFooterBtn = document.getElementById('add-prompt-footer-btn'); const addEmptyBtn = document.getElementById('add-prompt-empty-btn'); if (addFooterBtn) { addFooterBtn.disabled = disabled; addFooterBtn.style.cursor = disabled ? 'not-allowed' : ''; addFooterBtn.style.opacity = disabled ? '0.5' : '1'; } if (addEmptyBtn) { addEmptyBtn.disabled = disabled; addEmptyBtn.style.cursor = disabled ? 'not-allowed' : ''; addEmptyBtn.style.opacity = disabled ? '0.5' : '1'; } if (!disabled) { updateMoveButtonStates(); disableAllMoveButtons(false); } else { disableAllMoveButtons(true); } }
+
+    // --- UPDATE: Add Import/Export buttons to disable list ---
+    function disableDialogueEditing(disabled) {
+        const container = document.getElementById(CONTAINER_ID);
+        if (!container) return;
+
+        // Select all standard editing controls
+        container.querySelectorAll(`.${ITEM_WRAPPER_CLASS} .dialogue-textarea, .${ITEM_WRAPPER_CLASS} .repeat-input, .${ITEM_WRAPPER_CLASS} .remove-prompt-btn, .${ITEM_WRAPPER_CLASS} .add-prompt-btn, .${ITEM_WRAPPER_CLASS} .move-up-btn, .${ITEM_WRAPPER_CLASS} .move-down-btn`)
+            .forEach(el => {
+                el.disabled = disabled;
+                el.style.cursor = disabled ? 'not-allowed' : '';
+                el.style.opacity = disabled ? '0.5' : '1';
+            });
+
+        // Disable main add buttons
+        const addFooterBtn = document.getElementById('add-prompt-footer-btn');
+        const addEmptyBtn = document.getElementById('add-prompt-empty-btn');
+        if (addFooterBtn) {
+            addFooterBtn.disabled = disabled;
+            addFooterBtn.style.cursor = disabled ? 'not-allowed' : '';
+            addFooterBtn.style.opacity = disabled ? '0.5' : '1';
+        }
+        if (addEmptyBtn) {
+            addEmptyBtn.disabled = disabled;
+            addEmptyBtn.style.cursor = disabled ? 'not-allowed' : '';
+            addEmptyBtn.style.opacity = disabled ? '0.5' : '1';
+        }
+
+        // Disable Import/Export buttons
+        const importBtn = document.getElementById('import-template-btn');
+        const exportBtn = document.getElementById('export-template-btn');
+        if (importBtn) {
+            importBtn.disabled = disabled;
+             importBtn.style.cursor = disabled ? 'not-allowed' : ''; // Added
+             importBtn.style.opacity = disabled ? '0.5' : '1'; // Added
+        }
+        if (exportBtn) {
+            exportBtn.disabled = disabled;
+            exportBtn.style.cursor = disabled ? 'not-allowed' : ''; // Added
+            exportBtn.style.opacity = disabled ? '0.5' : '1'; // Added
+        }
+
+        // Update move buttons state based on general disabled status
+        if (!disabled) {
+            updateMoveButtonStates(); // Re-enable specific move buttons if necessary
+            disableAllMoveButtons(false); // Ensure all move buttons are generally enabled styling-wise
+        } else {
+            disableAllMoveButtons(true); // Disable all move buttons styling-wise
+        }
+    }
+
     function disableWaitTimeEditing(disabled) { /* ... no change ... */ const minInput = document.getElementById('min-wait-input'); const maxInput = document.getElementById('max-wait-input'); [minInput, maxInput].forEach(input => { if (input) { input.disabled = disabled; input.style.opacity = disabled ? '0.5' : '1'; input.style.cursor = disabled ? 'not-allowed' : ''; } }); }
     function disableDownloadFeature(disabled) { /* ... no change ... */ const input = document.getElementById('codeblock-id-input'); const button = document.getElementById('download-codeblock-btn'); if (input) { input.disabled = disabled; input.style.opacity = disabled ? '0.5' : '1'; input.style.cursor = disabled ? 'not-allowed' : ''; } if (button) { button.disabled = disabled; button.style.opacity = disabled ? '0.5' : '1'; button.style.cursor = disabled ? 'not-allowed' : ''; } }
     function setActivePromptHighlight(index) { /* ... no change ... */ const wrappers = document.querySelectorAll(`#${CONTAINER_ID} .${ITEM_WRAPPER_CLASS}`); wrappers.forEach((wrapper, i) => { const dot = wrapper.querySelector(`.${ACTIVE_PROMPT_DOT_CLASS}`); const numberSpan = wrapper.querySelector(`.${PROMPT_NUMBER_CLASS}`); wrapper.classList.remove('active-prompt'); if (i === index && isAutomating) { if (dot) dot.style.display = 'block'; if (numberSpan) numberSpan.style.display = 'none'; wrapper.classList.add('active-prompt'); } else { if (dot) dot.style.display = 'none'; if (numberSpan) { numberSpan.style.display = isAutomating ? 'none' : 'block'; } } }); }
@@ -156,7 +269,156 @@
     async function waitForChatGPTResponse() { /* ... no change ... */ return new Promise((resolve, reject) => { const timeout = 600000; const checkInterval = 250; let timeElapsed = 0; let generationDetected = false; let noStopButtonCount = 0; const noStopButtonThreshold = 20; const intervalId = setInterval(() => { if (stopRequested) { console.log("waitForChatGPTResponse: Stop requested, resolving early."); clearInterval(intervalId); resolve(); return; } timeElapsed += checkInterval; if (timeElapsed > timeout) { clearInterval(intervalId); console.error("waitForChatGPTResponse: Timeout waiting for response."); return reject(new Error("Hết thời gian chờ phản hồi từ ChatGPT.")); } const stopButton = document.querySelector(STOP_GENERATING_BUTTON_SELECTOR); const isGenerating = !!stopButton && stopButton.offsetHeight > 0; if (isGenerating) { if (!generationDetected) { console.log("waitForChatGPTResponse: Generation detected (stop button appeared)."); generationDetected = true; } noStopButtonCount = 0; } else { if (generationDetected) { noStopButtonCount++; console.log(`waitForChatGPTResponse: Stop button absent (count: ${noStopButtonCount}/${noStopButtonThreshold}).`); if (noStopButtonCount >= noStopButtonThreshold) { console.log("waitForChatGPTResponse: Stop button absent threshold reached after detection. Assuming response complete."); clearInterval(intervalId); resolve(); } } else { const sendButton = document.querySelector(SEND_BUTTON_SELECTOR); if (sendButton && !sendButton.disabled && sendButton.offsetHeight > 0 && timeElapsed > 1000) { console.warn("waitForChatGPTResponse: Stop button never detected, but send button is active again. Assuming completion/error."); clearInterval(intervalId); resolve(); } } } }, checkInterval); }); }
     function downloadCodeblockData() { /* ... no change ... */ const idInput = document.getElementById('codeblock-id-input'); if (!idInput) return; const targetId = idInput.value.trim(); if (!targetId) { updateStatus("Vui lòng nhập ID Code Block."); return; } updateStatus(`Đang tìm code block với ID: ${targetId}...`); const codeBlockContainers = document.querySelectorAll(CODE_BLOCK_CONTAINER_SELECTOR); let foundContents = []; let foundCount = 0; codeBlockContainers.forEach(container => { if (container.closest(`#${MAIN_PANEL_ID}`)) { return; } const header = container.querySelector(CODE_BLOCK_HEADER_SELECTOR); if (header && header.textContent?.trim() === targetId) { const codeContent = container.querySelector(CODE_BLOCK_CONTENT_SELECTOR); if (codeContent) { const rawText = codeContent.textContent || ""; const cleanedText = rawText.split('\n').map(line => line.trimEnd()).join('\n').trim(); if (cleanedText) { foundContents.push(cleanedText); foundCount++; console.log(`Found matching code block content for ID '${targetId}'.`); } else { console.log(`Found matching header for ID '${targetId}', but code content was empty.`); } } else { console.warn(`Found header matching ID '${targetId}' but no code content element ('${CODE_BLOCK_CONTENT_SELECTOR}') inside.`); } } }); if (foundCount === 0) { updateStatus(`Không tìm thấy code block nào với ID: ${targetId}.`); console.log(`No code blocks found matching ID '${targetId}'.`); return; } const compiledContent = foundContents.join('\n\n/* --- Code Block Separator --- */\n\n'); try { const blob = new Blob([compiledContent], { type: 'text/plain;charset=utf-8' }); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; const safeId = targetId.replace(/[^a-z0-9_\-\(\)]/gi, '_'); link.download = `codeblock_${safeId}_data.txt`; document.body.appendChild(link); link.click(); document.body.removeChild(link); URL.revokeObjectURL(url); updateStatus(`Đã tải ${foundCount} code block với ID: ${targetId}.`); console.log(`Successfully downloaded ${foundCount} code blocks for ID '${targetId}'.`); } catch (error) { console.error("Error creating/downloading file:", error); updateStatus("Lỗi khi tạo file tải về."); } }
 
-    // --- STYLES (Animation refinements applied here) ---
+
+    // --- NEW: Import/Export Functions ---
+    function exportTemplate() {
+        if (isAutomating) {
+            updateStatus("Không thể xuất khi đang chạy tự động.");
+            return;
+        }
+        updateDialogueDataArray(); // Ensure current data is captured
+        if (dialogueData.length === 0) {
+            updateStatus("Không có câu thoại nào để xuất.");
+            return;
+        }
+
+        try {
+            // Create a clean version for export (optional, but good practice)
+            const exportData = dialogueData.map(item => ({
+                text: item.text || '',
+                repeat: item.repeat || 1
+            }));
+            const jsonData = JSON.stringify(exportData, null, 2); // Pretty print JSON
+            const blob = new Blob([jsonData], { type: 'application/json;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            const timestamp = getCurrentTimestampForFilename();
+            link.download = `auto_chatgpt_template_${timestamp}.json`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+            updateStatus(`Đã xuất ${exportData.length} câu thoại.`);
+            console.log(`Successfully exported ${exportData.length} dialogues.`);
+        } catch (error) {
+            console.error("Lỗi khi xuất template:", error);
+            updateStatus("Lỗi khi xuất file template.");
+        }
+    }
+
+    function triggerImport() {
+        if (isAutomating) {
+            updateStatus("Không thể nhập khi đang chạy tự động.");
+            return;
+        }
+        if (fileInput) {
+            fileInput.click(); // Open file chooser dialog
+        } else {
+             console.error("Import Error: File input element not found.");
+             updateStatus("Lỗi: Không tìm thấy thành phần nhập file.");
+        }
+    }
+
+    function handleFileImport(event) {
+        const file = event.target.files[0];
+        if (!file) {
+            console.log("Import cancelled by user.");
+            // Reset file input value to allow re-selecting the same file
+            if (fileInput) fileInput.value = null;
+            return;
+        }
+
+        if (file.type !== 'application/json') {
+            updateStatus("Lỗi: Chỉ chấp nhận file .json.");
+            console.warn("Import rejected: Invalid file type", file.type);
+            if (fileInput) fileInput.value = null;
+            return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            try {
+                const content = e.target.result;
+                const parsedData = JSON.parse(content);
+
+                // --- Validation ---
+                if (!Array.isArray(parsedData)) {
+                    throw new Error("Định dạng JSON không hợp lệ (không phải là một mảng).");
+                }
+
+                const validatedData = [];
+                for (const item of parsedData) {
+                    if (item && typeof item.text === 'string' && typeof item.repeat === 'number' && item.repeat >= 1) {
+                        validatedData.push({
+                            id: generateUniqueId(), // Generate new ID on import
+                            text: item.text,
+                            repeat: Math.floor(item.repeat) // Ensure integer
+                        });
+                    } else {
+                        console.warn("Bỏ qua mục không hợp lệ trong file JSON:", item);
+                    }
+                }
+
+                if (validatedData.length === 0 && parsedData.length > 0) {
+                     throw new Error("File JSON không chứa mục câu thoại hợp lệ.");
+                }
+                 if (validatedData.length === 0) {
+                     updateStatus("File không chứa câu thoại nào hoặc định dạng không đúng.");
+                     return;
+                 }
+
+                // --- Confirmation ---
+                const confirmationMessage = `Bạn có chắc chắn muốn thay thế ${dialogueData.length} câu thoại hiện tại bằng ${validatedData.length} câu thoại từ file "${file.name}" không?`;
+                if (!confirm(confirmationMessage)) {
+                    updateStatus("Đã hủy nhập template.");
+                    console.log("Import cancelled by user confirmation.");
+                    return;
+                }
+
+                // --- Apply Import ---
+                const container = document.getElementById(CONTAINER_ID);
+                if (!container) {
+                    console.error("Cannot import: Dialogue container not found.");
+                    updateStatus("Lỗi: Không tìm thấy vùng chứa câu thoại.");
+                    return;
+                }
+
+                // Clear existing dialogues
+                container.querySelectorAll(`:scope > .${ITEM_WRAPPER_CLASS}`).forEach(el => el.remove());
+                dialogueData = []; // Clear internal data array
+
+                // Add imported dialogues
+                validatedData.forEach(data => addDialogueInput(data));
+
+                // Update UI and save
+                saveDialogues(); // This calls updateDialogueDataArray internally now
+                updateEmptyStateVisibility();
+                updateMoveButtonStates();
+                updatePromptNumbers();
+                updateStatus(`Đã nhập thành công ${validatedData.length} câu thoại.`);
+                console.log(`Successfully imported ${validatedData.length} dialogues.`);
+
+            } catch (error) {
+                console.error("Lỗi khi nhập template:", error);
+                updateStatus(`Lỗi nhập: ${error.message}`);
+            } finally {
+                 // Reset file input value MUST be done regardless of success/failure
+                 if (fileInput) fileInput.value = null;
+            }
+        };
+
+        reader.onerror = function(e) {
+            console.error("Lỗi đọc file:", e);
+            updateStatus("Lỗi khi đọc file.");
+            if (fileInput) fileInput.value = null; // Reset on error too
+        };
+
+        reader.readAsText(file);
+    }
+
+
+    // --- STYLES (Add styles for new buttons) ---
     GM_addStyle(`
          :root {
             --panel-width: 300px;
@@ -198,14 +460,12 @@
             --transition-duration-slow: var(--animation-duration); /* Align with swap animation */
          }
 
-        /* *** ANIMATION CHANGE: Refined pulsing keyframe *** */
         @keyframes gentle-pulse {
             from { opacity: 0.6; transform: scale(0.95); box-shadow: 0 0 3px 0px rgba(255, 77, 79, 0.5); }
             to   { opacity: 1; transform: scale(1.05); box-shadow: 0 0 6px 1px rgba(255, 77, 79, 0.7); }
         }
 
-
-         #${MAIN_PANEL_ID} {
+        #${MAIN_PANEL_ID} {
             position: fixed; bottom: 20px; right: 20px;
             width: var(--panel-width); max-height: var(--panel-max-height);
             background: var(--panel-bg); backdrop-filter: blur(var(--panel-blur)) saturate(180%); -webkit-backdrop-filter: blur(var(--panel-blur)) saturate(180%);
@@ -214,7 +474,6 @@
             color: var(--text-primary); font-family: var(--font-main); font-size: 11px;
             display: flex; flex-direction: column; overflow: hidden; resize: none !important;
             transform-origin: bottom right; opacity: 1; visibility: visible; transform: scale(1);
-            /* *** ANIMATION CHANGE: Smoother easing for minimize/maximize *** */
             transition: transform var(--transition-duration-slow) var(--transition-curve-fast),
                         opacity var(--transition-duration-slow) var(--transition-curve-fast),
                         visibility 0s linear 0s;
@@ -226,7 +485,6 @@
          #${MAIN_PANEL_ID}.minimized {
             transform: scale(0.05) translate(-15px, -15px); opacity: 0;
             pointer-events: none; visibility: hidden;
-            /* *** ANIMATION CHANGE: Consistent easing, delayed visibility *** */
             transition: transform var(--transition-duration-slow) var(--transition-curve-fast),
                         opacity var(--transition-duration-slow) var(--transition-curve-fast),
                         visibility 0s linear var(--transition-duration-slow);
@@ -240,7 +498,6 @@
             box-shadow: var(--minimize-dot-shadow); cursor: pointer; z-index: 10002;
             display: flex; align-items: center; justify-content: center;
             opacity: 0.9; transform: scale(1);
-            /* *** ANIMATION CHANGE: Smoother hover effect *** */
             transition: transform var(--transition-duration-normal) var(--transition-curve-bounce),
                         opacity var(--transition-duration-normal) var(--transition-curve-fast);
          }
@@ -254,7 +511,6 @@
         .panel-header-button {
             background: transparent; border: none; color: var(--icon-color); padding: 4px; border-radius: 7px; cursor: pointer;
             display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; flex-shrink: 0;
-            /* *** ANIMATION CHANGE: Faster, smoother hover *** */
             transition: background-color var(--transition-duration-fast) var(--transition-curve-fast),
                         color var(--transition-duration-fast) var(--transition-curve-fast);
         }
@@ -282,36 +538,78 @@
 
         #dialogue-empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 25px 15px; text-align: center; color: var(--text-secondary); flex-grow: 1; user-select: none; order: 999; }
         #dialogue-empty-state p { margin: 0 0 12px 0; font-size: 1em; }
-        #dialogue-add-footer { padding: 6px 15px 12px 15px; flex-shrink: 0; display: flex; }
+        #dialogue-add-footer { padding: 6px 15px 6px 15px; flex-shrink: 0; display: flex; } /* Reduced bottom padding */
 
         .add-prompt-main-btn {
             width: 100%; padding: 8px 11px; font-size: 1em; border-radius: var(--border-radius-inner);
             background-color: transparent; color: var(--text-secondary); border: 1px dashed rgba(255, 255, 255, 0.25);
             cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 5px; font-weight: 500;
-            /* *** ANIMATION CHANGE: Use standard curve *** */
             transition: all var(--transition-duration-normal) var(--transition-curve-fast);
         }
         .add-prompt-main-btn:hover:not(:disabled) { background-color: rgba(255, 255, 255, 0.06); color: var(--text-primary); border-color: rgba(255, 255, 255, 0.4); border-style: solid; }
         .add-prompt-main-btn:active:not(:disabled) { transform: scale(0.98); }
         .add-prompt-main-btn:disabled { cursor: not-allowed; opacity: 0.5; }
-        .add-prompt-main-btn svg { width: 11px; height: 11px; }
+        .add-prompt-main-btn svg { width: 11px; height: 11px; vertical-align: middle; margin-bottom: 1px; }
+
+        /* --- NEW: Styles for Import/Export Container & Buttons --- */
+        .template-actions-container {
+            padding: 6px 15px 8px 15px; /* Top, sides, bottom */
+            display: flex;
+            gap: 8px; /* Space between buttons */
+            flex-shrink: 0;
+        }
+        .template-action-btn {
+            flex-grow: 1; /* Make buttons share space */
+            padding: 7px 10px; /* Slightly less padding than main button */
+            font-size: 0.95em; /* Slightly smaller text */
+            border-radius: var(--border-radius-inner);
+            background-color: rgba(255, 255, 255, 0.06); /* Subtle background */
+            color: var(--text-secondary);
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            cursor: pointer;
+            text-align: center;
+            font-weight: 500;
+            display: inline-flex; /* Align icon and text */
+            align-items: center;
+            justify-content: center;
+            gap: 5px;
+            transition: all var(--transition-duration-normal) var(--transition-curve-fast);
+        }
+        .template-action-btn svg {
+            width: 11px; height: 11px; fill: currentColor;
+             vertical-align: middle; margin-bottom: 1px;
+        }
+        .template-action-btn:hover:not(:disabled) {
+            background-color: rgba(255, 255, 255, 0.1);
+            color: var(--text-primary);
+            border-color: rgba(255, 255, 255, 0.3);
+        }
+        .template-action-btn:active:not(:disabled) {
+            transform: scale(0.98);
+            background-color: rgba(255, 255, 255, 0.08);
+        }
+        .template-action-btn:disabled {
+            cursor: not-allowed !important; /* Ensure cursor style applies */
+            opacity: 0.5 !important; /* Ensure opacity applies */
+             background-color: rgba(255, 255, 255, 0.05);
+             border-color: rgba(255, 255, 255, 0.15);
+             color: var(--text-placeholder);
+        }
+        /* --- End New Styles --- */
 
         .${ITEM_WRAPPER_CLASS} {
             margin-bottom: 6px; padding: 6px; border-radius: var(--border-radius-inner); border: 1px solid transparent;
             background-color: transparent; order: 1; position: relative; overflow: visible;
             padding-left: 26px; will-change: transform;
-             /* *** ANIMATION CHANGE: Transition for background hover, keep transform transition handled by JS *** */
             transition: background-color var(--transition-duration-fast) var(--transition-curve-fast),
                         border-color var(--transition-duration-fast) var(--transition-curve-fast);
         }
         .${ITEM_WRAPPER_CLASS}:hover { background-color: rgba(255, 255, 255, 0.04); }
-        /* Optional: Style for active prompt (can be removed if dot is enough) */
         /* .${ITEM_WRAPPER_CLASS}.active-prompt { background-color: rgba(80, 140, 255, 0.05); } */
 
         .${PROMPT_NUMBER_CLASS} {
             position: absolute; left: 8px; top: 18px; font-size: 0.9em; font-weight: 500; color: var(--text-secondary);
             width: 20px; text-align: left; line-height: 1.2; display: block; user-select: none; z-index: 1;
-            /* *** ANIMATION CHANGE: Smooth fade for number visibility *** */
             transition: opacity var(--transition-duration-normal) var(--transition-curve-fast);
         }
 
@@ -319,7 +617,6 @@
             position: absolute; left: 8px; top: 18px; width: var(--active-dot-size); height: var(--active-dot-size);
             background-color: var(--active-dot-color); border-radius: 50%; box-shadow: 0 0 5px 1px rgba(255, 77, 79, 0.7);
             display: none; z-index: 2;
-            /* *** ANIMATION CHANGE: Apply refined keyframe and timing *** */
             animation: gentle-pulse 1.2s infinite alternate ease-in-out;
         }
 
@@ -328,7 +625,6 @@
             width: 100%; box-sizing: border-box; padding: 8px 11px; border: 1px solid var(--input-border); border-radius: var(--border-radius-inner);
             background-color: var(--input-bg); color: var(--text-primary); resize: none; min-height: 36px;
             font-size: 1em; line-height: 1.45; overflow-y: hidden; font-family: inherit;
-            /* *** ANIMATION CHANGE: Standard transition for focus *** */
             transition: border-color var(--transition-duration-normal) var(--transition-curve-fast),
                         background-color var(--transition-duration-normal) var(--transition-curve-fast),
                         box-shadow var(--transition-duration-normal) var(--transition-curve-fast);
@@ -342,7 +638,6 @@
             width: 38px; padding: 3px 5px; margin-right: auto; border: 1px solid var(--input-border); border-radius: 6px;
             background-color: var(--input-bg); color: var(--text-primary); font-size: 0.9em; text-align: center; -moz-appearance: textfield;
             line-height: 1.3; height: 24px; box-sizing: border-box;
-            /* *** ANIMATION CHANGE: Standard transition for focus *** */
             transition: border-color var(--transition-duration-normal) var(--transition-curve-fast),
                         background-color var(--transition-duration-normal) var(--transition-curve-fast),
                         box-shadow var(--transition-duration-normal) var(--transition-curve-fast);
@@ -353,7 +648,6 @@
         .icon-button {
             background: transparent; border: none; color: var(--icon-color); padding: 4px; border-radius: 6px; cursor: pointer;
             display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px;
-             /* *** ANIMATION CHANGE: Faster standard transitions *** */
             transition: background-color var(--transition-duration-fast) var(--transition-curve-fast),
                         color var(--transition-duration-fast) var(--transition-curve-fast),
                         transform var(--transition-duration-fast) var(--transition-curve-fast),
@@ -375,7 +669,6 @@
         #automation-settings input[type="number"] {
             width: 42px; padding: 5px 6px; border: 1px solid var(--input-border); border-radius: 6px; background-color: var(--input-bg);
             color: var(--text-primary); font-size: 1em; text-align: center; -moz-appearance: textfield;
-             /* *** ANIMATION CHANGE: Standard transition for focus *** */
             transition: border-color var(--transition-duration-normal) var(--transition-curve-fast),
                         background-color var(--transition-duration-normal) var(--transition-curve-fast),
                         box-shadow var(--transition-duration-normal) var(--transition-curve-fast);
@@ -389,7 +682,6 @@
         #start-automation-btn, #stop-automation-btn {
             padding: 8px 12px; font-size: 1.05em; flex-grow: 1; margin: 0; border-radius: var(--border-radius-inner); font-weight: 500;
             border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px;
-             /* *** ANIMATION CHANGE: Standard transitions for buttons *** */
             transition: background-color var(--transition-duration-normal) var(--transition-curve-fast),
                         color var(--transition-duration-normal) var(--transition-curve-fast),
                         box-shadow var(--transition-duration-normal) var(--transition-curve-fast),
@@ -415,7 +707,6 @@
         #download-section input[type="text"] {
             flex-grow: 1; padding: 6px 10px; border: 1px solid var(--input-border); border-radius: 6px; background-color: var(--input-bg);
             color: var(--text-primary); font-size: 1em; min-width: 60px;
-             /* *** ANIMATION CHANGE: Standard transition for focus *** */
             transition: border-color var(--transition-duration-normal) var(--transition-curve-fast),
                         background-color var(--transition-duration-normal) var(--transition-curve-fast),
                         box-shadow var(--transition-duration-normal) var(--transition-curve-fast);
@@ -426,7 +717,6 @@
             padding: 6px 10px; font-size: 1em; border-radius: 6px; background-color: rgba(80, 140, 255, 0.18); color: #cddbff;
             border: 1px solid rgba(80, 140, 255, 0.4); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 5px;
             flex-shrink: 0; font-weight: 500;
-            /* *** ANIMATION CHANGE: Standard transitions for button *** */
             transition: background-color var(--transition-duration-normal) var(--transition-curve-fast),
                         color var(--transition-duration-normal) var(--transition-curve-fast),
                         border-color var(--transition-duration-normal) var(--transition-curve-fast),
@@ -449,9 +739,10 @@
         document.body.setAttribute(listenerAttachedAttribute, 'true');
         document.arrive(PROMPT_TEXTAREA_SELECTOR, { onceOnly: true, existing: true }, function() {
             console.log(`Auto ChatGPT: Prompt textarea found. Creating UI (v${SCRIPT_VERSION}).`);
-            setTimeout(createUI, 900);
+            setTimeout(createUI, 900); // Delay slightly to ensure page elements are stable
         });
     } else {
+         // If script re-runs (e.g., Tampermonkey update), check if UI needs creation
          if (document.querySelector(PROMPT_TEXTAREA_SELECTOR) && !document.getElementById(MAIN_PANEL_ID)) {
             console.log(`Auto ChatGPT: Re-initializing UI (v${SCRIPT_VERSION}).`);
             setTimeout(createUI, 200);
