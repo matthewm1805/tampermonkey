@@ -9,8 +9,6 @@
 // @match        *://www.sora.*.com/*
 // @match        *://sora.*.com/*
 // @match        https://sora.chatgpt.com/*
-// @updateURL    https://raw.githubusercontent.com/matthewm1805/tampermonkey/main/%F0%9F%A7%A0%20Auto%20Sora.user.js
-// @downloadURL  https://raw.githubusercontent.com/matthewm1805/tampermonkey/main/%F0%9F%A7%A0%20Auto%20Sora.user.js
 // @grant        none
 // @require      https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js
 // ==/UserScript==
