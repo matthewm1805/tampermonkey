@@ -24,7 +24,7 @@
     const STATUS_KEY = SCRIPT_PREFIX + 'status';
     const VIDEO_LINK_SELECTORS = ["ytcp-video-list-cell-video a.yt-simple-endpoint", "a#video-title"];
     const SCROLL_CONTAINER_SELECTORS = ["#container.style-scope.ytcp-app", "#content-container", "ytcp-app"];
-    const concurrencyLimit = 1; // Giới hạn số popup xử lý đồng thời, giống script gốc
+    const concurrencyLimit = 1;
 
     // =================================================================================
     // UTILITY: Các hàm tiện ích
@@ -149,7 +149,6 @@
     // STEP 2: Trang bản quyền -> SỬ DỤNG LOGIC POPUP TỪ SCRIPT GỐC
     // =================================================================================
 
-    // Các hàm helper được tái cấu trúc từ script gốc của bạn
     async function legacy_waitForNewPopup() {
         for (let i = 0; i < 5; i++) {
             const popup = document.querySelector("ytcp-dialog");
@@ -173,10 +172,10 @@
                     claimants.push(name);
                     next = next.nextElementSibling;
                 }
-                return claimants; // Trả về mảng các tên
+                return claimants;
             }
         }
-        return []; // Trả về mảng rỗng nếu không tìm thấy
+        return [];
     }
 
     async function legacy_closeAndRemovePopup() {
@@ -188,7 +187,6 @@
         });
     }
 
-    // Hàm chính xử lý một hàng (một khiếu nại)
     async function legacy_processRow(row) {
         if (!row || row.hasAttribute("data-processed-v7")) return [];
         const detailsButton = row.querySelector("button[aria-label*='See details']");
@@ -209,12 +207,10 @@
         await legacy_closeAndRemovePopup();
         row.setAttribute("data-processed-v7", "true");
 
-        // Lọc và trả về các khiếu nại không phải của Epidemic
         return claimants.filter(name => name && !name.toLowerCase().includes("epidemic sound"));
     }
 
 
-    // Hàm điều khiển việc quét trên trang copyright
     async function scanCopyrightPageWithLegacyLogic() {
         const rows = Array.from(document.querySelectorAll("ytcr-video-content-list-row"));
         if (rows.length === 0) {
