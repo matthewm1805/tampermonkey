@@ -3,7 +3,7 @@
 // @namespace   http://tampermonkey.net/
 // @version     0.5
 // @description Extract all file URLs from Google Drive folder, with accurate file count
-// @author      Grok
+// @author      Matthew M.
 // @match       https://drive.google.com/drive/*
 // @grant       none
 // ==/UserScript==
@@ -115,7 +115,8 @@
 
         // Hoàn tất quá trình trích xuất và tải xuống file
         function finalizeExtraction() {
-            const content = Array.from(urls).join('\n'); // Nối các URL bằng dấu xuống dòng
+            // Thay đổi dòng này để nối các URL bằng dấu phẩy
+            const content = Array.from(urls).join(','); 
 
             const blob = new Blob([content], {type: 'text/plain'});
             const url = window.URL.createObjectURL(blob);
