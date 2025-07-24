@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         Auto Tools for Automusic
+// @name         Auto Code Sim & +Channel
 // @namespace    http://tampermonkey.net/
 // @version      3.5.0
 // @description  Tích hợp: Lấy OTP từ codesim.net và tự động điền email khi thêm kênh mới.
