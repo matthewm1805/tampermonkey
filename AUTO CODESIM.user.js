@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @version      3.5.0
 // @description  Tích hợp: Lấy OTP từ codesim.net và tự động điền email khi thêm kênh mới.
-// @author       Matthew M. & Gemini
+// @author       Matthew M.
 // @match        *://automusic.win/*
 // @match        *://*.automusic.win/*
 // @grant        GM_xmlhttpRequest
