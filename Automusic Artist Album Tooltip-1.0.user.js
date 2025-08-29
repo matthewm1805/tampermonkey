@@ -1,9 +1,9 @@
 // ==UserScript==
-// @name         Automusic Artist Album Tooltip
+// @name         Automusic - Smart Loader & Artist Statistics
 // @namespace    http://tampermonkey.net/
-// @version      1.0
-// @description  Hiển thị thông tin các album và ngày phát hành của một nghệ sĩ khi di chuột qua tên của họ.
-// @author       Matthew M.
+// @version      5.1
+// @description  Tự động tải nhanh tất cả album, cuộn lên đầu trang và cung cấp pop-up thống kê nghệ sĩ.
+// @author       Gemini
 // @match        https://automusic.win/album*
 // @grant        GM_addStyle
 // @run-at       document-idle
@@ -12,96 +12,216 @@
 (function() {
     'use strict';
 
-    // CSS cho tooltip
+    // --- CSS ---
     GM_addStyle(`
-        .artist-tooltip {
-            position: absolute;
-            background-color: #333;
-            color: #fff;
-            padding: 10px;
-            border-radius: 5px;
-            z-index: 1000;
-            font-size: 14px;
-            width: 300px; /* Tăng chiều rộng để có thêm không gian */
-            box-shadow: 0 4px 8px rgba(0,0,0,0.3); /* Thêm bóng đổ để nổi bật */
+        /* Hộp thông báo */
+        #auto-loader-status {
+            position: fixed; bottom: 20px; left: 20px;
+            background-color: rgba(40, 40, 40, 0.85); color: #E0E0E0;
+            padding: 12px 18px; border-radius: 8px; z-index: 9999;
+            font-size: 14px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            transition: opacity 0.5s ease, transform 0.3s ease;
+            opacity: 0; transform: translateY(10px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.4);
+            backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px);
         }
-        .artist-tooltip ul {
-            list-style: none;
-            padding: 0;
-            margin: 0;
+        #auto-loader-status.visible { opacity: 1; transform: translateY(0); }
+
+        /* Nút Thống kê */
+        #stats-button {
+            position: fixed; bottom: 20px; right: 20px;
+            background-color: #007bff; color: white;
+            padding: 12px 20px; border-radius: 25px; z-index: 9998;
+            font-size: 16px; font-weight: bold; cursor: pointer;
+            border: none; box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            transition: all 0.3s ease; display: none;
         }
-        .artist-tooltip li {
-            margin-bottom: 5px;
-            display: flex;
-            justify-content: space-between; /* Căn chỉnh nội dung hai bên */
-            border-bottom: 1px solid #555; /* Thêm đường kẻ phân cách */
-            padding-bottom: 5px;
+        #stats-button:hover { background-color: #0056b3; transform: scale(1.05); }
+
+        /* Pop-up Thống kê */
+        #stats-modal-overlay {
+            position: fixed; top: 0; left: 0;
+            width: 100%; height: 100%;
+            background-color: rgba(0,0,0,0.6);
+            z-index: 10000; display: flex;
+            align-items: center; justify-content: center;
         }
-        .artist-tooltip li:last-child {
-            margin-bottom: 0;
-            border-bottom: none; /* Bỏ đường kẻ cho mục cuối */
+        #stats-modal-content {
+            background: #2c2c2c; color: #f1f1f1;
+            padding: 25px; border-radius: 10px;
+            width: 90%; max-width: 800px;
+            max-height: 85vh; overflow-y: auto;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            position: relative;
         }
-        .album-release-date {
-            font-style: italic;
-            color: #ccc;
-            white-space: nowrap; /* Ngăn ngày tháng xuống dòng */
-            margin-left: 10px; /* Tạo khoảng cách với tên album */
+        #stats-modal-close {
+            position: absolute; top: 15px; right: 20px;
+            font-size: 28px; font-weight: bold;
+            color: #aaa; cursor: pointer;
+        }
+        #stats-modal-close:hover { color: #fff; }
+
+        /* Bảng Thống kê */
+        #stats-table {
+            width: 100%; border-collapse: collapse; margin-top: 20px;
+        }
+        #stats-table th, #stats-table td {
+            padding: 12px; text-align: left;
+            border-bottom: 1px solid #444;
+        }
+        #stats-table th { background-color: #383838; }
+        #stats-table tr:hover { background-color: #404040; }
+        #stats-table .genre-list { display: flex; flex-wrap: wrap; gap: 5px; }
+        #stats-table .genre-tag {
+            background-color: #007bff; color: white;
+            padding: 3px 8px; border-radius: 12px;
+            font-size: 12px;
         }
     `);
 
-    // Hàm chính để khởi chạy tập lệnh
-    function run_script() {
-        // Lắng nghe sự kiện di chuột vào phần tử có class 'album-subtitle'
-        document.body.addEventListener('mouseover', function(event) {
-            const subtitleElement = event.target.closest('.album-subtitle');
+    // --- LOGIC ---
 
-            if (subtitleElement) {
-                // Trích xuất tên nghệ sĩ từ nội dung của phần tử, loại bỏ các phần tử con
-                const artistName = subtitleElement.cloneNode(true);
-                // Loại bỏ các thẻ span con để chỉ lấy tên
-                artistName.querySelectorAll('span').forEach(span => span.remove());
-                const artist = artistName.textContent.trim();
+    // 1. Chức năng hiển thị thông báo
+    const statusBox = document.createElement('div');
+    statusBox.id = 'auto-loader-status';
+    document.body.appendChild(statusBox);
 
-                // Lấy tất cả các album của nghệ sĩ
-                const albums = [];
-                document.querySelectorAll('.album-row').forEach(row => {
-                    const albumSubtitle = row.querySelector('.album-subtitle');
-                    if (albumSubtitle && albumSubtitle.textContent.includes(artist)) {
-                        const albumTitle = row.querySelector('.album-title-cell').textContent.trim();
-                        const releaseDate = row.querySelector('.release-date').textContent.trim();
-                        albums.push({ title: albumTitle, date: releaseDate });
-                    }
-                });
+    let statusTimeout;
+    function updateStatus(message, permanent = false) {
+        clearTimeout(statusTimeout);
+        statusBox.textContent = message;
+        statusBox.classList.add('visible');
+        if (!permanent) {
+            statusTimeout = setTimeout(() => statusBox.classList.remove('visible'), 3500);
+        }
+    }
 
-                // Tạo tooltip nếu có album
-                if (albums.length > 0) {
-                    const tooltip = document.createElement('div');
-                    tooltip.className = 'artist-tooltip';
-                    let content = `<h5>${artist} - ${albums.length} Album(s)</h5><ul>`;
-                    albums.forEach(album => {
-                        content += `<li>${album.title} <span class="album-release-date">${album.date}</span></li>`;
-                    });
-                    content += '</ul>';
-                    tooltip.innerHTML = content;
-                    document.body.appendChild(tooltip);
+    // 2. Chức năng thống kê
+    function showStatistics() {
+        // Thu thập và xử lý dữ liệu
+        const artistStats = {};
+        document.querySelectorAll('.album-row').forEach(row => {
+            const subtitleClone = row.querySelector('.album-subtitle').cloneNode(true);
+            subtitleClone.querySelectorAll('span').forEach(span => span.remove());
+            const artistName = subtitleClone.textContent.trim();
 
-                    // tracking tooltip
-                    const rect = subtitleElement.getBoundingClientRect();
-                    tooltip.style.left = `${rect.left + window.scrollX}px`;
-                    tooltip.style.top = `${rect.bottom + window.scrollY + 5}px`;
+            if (!artistName) return;
 
-                    // di chuột ra để xóa tooltip
-                    subtitleElement.addEventListener('mouseout', () => {
-                        if (document.body.contains(tooltip)) {
-                            document.body.removeChild(tooltip);
-                        }
-                    }, { once: true });
-                }
+            const genre = row.querySelector('.genre-pill').textContent.trim();
+            const releaseDateStr = row.querySelector('.release-date').textContent.trim();
+            const releaseDate = new Date(releaseDateStr);
+
+            if (!artistStats[artistName]) {
+                artistStats[artistName] = {
+                    genres: new Set(),
+                    latestDate: new Date(0)
+                };
             }
+
+            artistStats[artistName].genres.add(genre);
+            if (releaseDate > artistStats[artistName].latestDate) {
+                artistStats[artistName].latestDate = releaseDate;
+            }
+        });
+
+        // Tạo nội dung bảng
+        let tableRows = '';
+        for (const artist in artistStats) {
+            const stats = artistStats[artist];
+            const genresHTML = [...stats.genres].map(g => `<span class="genre-tag">${g}</span>`).join('');
+            const latestDateFormatted = stats.latestDate.toLocaleDateString('vi-VN', {
+                day: '2-digit', month: '2-digit', year: 'numeric'
+            });
+
+            tableRows += `
+                <tr>
+                    <td>${artist}</td>
+                    <td><div class="genre-list">${genresHTML}</div></td>
+                    <td>${latestDateFormatted}</td>
+                </tr>
+            `;
+        }
+
+        // Tạo và hiển thị pop-up
+        const modalHTML = `
+            <div id="stats-modal-overlay">
+                <div id="stats-modal-content">
+                    <span id="stats-modal-close">&times;</span>
+                    <h2>Thống Kê Nghệ Sĩ</h2>
+                    <table id="stats-table">
+                        <thead>
+                            <tr>
+                                <th>Tên Artist</th>
+                                <th>Tất cả các Genre</th>
+                                <th>Ngày Release gần nhất</th>
+                            </tr>
+                        </thead>
+                        <tbody>${tableRows}</tbody>
+                    </table>
+                </div>
+            </div>
+        `;
+        document.body.insertAdjacentHTML('beforeend', modalHTML);
+
+        // Thêm sự kiện để đóng pop-up
+        const overlay = document.getElementById('stats-modal-overlay');
+        document.getElementById('stats-modal-close').addEventListener('click', () => overlay.remove());
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) overlay.remove();
         });
     }
 
-    // Chờ load trang
-    setTimeout(run_script, 1000);
+    // 3. Chức năng tự động tải
+    function autoLoadAll() {
+        const albumContainer = document.getElementById('albums-list');
+        if (!albumContainer) return;
+
+        updateStatus('🚀 Bắt đầu quá trình tải nhanh...', true);
+
+        // Hàm kích hoạt tải tiếp theo
+        const triggerNextLoad = () => {
+            const endMessage = document.querySelector('#end-message .text-muted');
+            if (endMessage && endMessage.innerText.includes("You've reached the end!")) {
+                observer.disconnect(); // Ngừng theo dõi
+                const finalCount = document.querySelectorAll('.album-row, .album-card').length;
+                updateStatus(`✅ Hoàn tất! Đã tải ${finalCount} albums. Đang cuộn lên...`, true);
+
+                // Tự động cuộn lên đầu trang
+                setTimeout(() => {
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                    updateStatus(`Tải xong! Sẵn sàng để thống kê.`, false);
+                    // Hiển thị nút Thống kê
+                    const statsButton = document.createElement('button');
+                    statsButton.id = 'stats-button';
+                    statsButton.textContent = '📊 Thống kê';
+                    statsButton.onclick = showStatistics;
+                    document.body.appendChild(statsButton);
+                    statsButton.style.display = 'block';
+                }, 500);
+                return;
+            }
+            // Cuộn xuống để tải tiếp
+            window.scrollTo({ top: document.body.scrollHeight, behavior: 'auto' });
+        };
+
+        // Theo dõi khi có nội dung mới được tải
+        const observer = new MutationObserver((mutations) => {
+            if (mutations.some(m => m.type === 'childList' && m.addedNodes.length > 0)) {
+                const albumCount = document.querySelectorAll('.album-row, .album-card').length;
+                updateStatus(`Đã tải ${albumCount} albums...`, true);
+                // Chờ một chút rồi mới kích hoạt lần tải tiếp theo
+                setTimeout(triggerNextLoad, 300);
+            }
+        });
+
+        // Bắt đầu theo dõi
+        observer.observe(albumContainer, { childList: true, subtree: true });
+
+        // Kích hoạt lần tải đầu tiên
+        triggerNextLoad();
+    }
+
+    // Chờ trang tải xong rồi chạy
+    setTimeout(autoLoadAll, 1500);
 
 })();
